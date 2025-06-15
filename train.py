@@ -16,11 +16,11 @@ import numpy as np
 import torch
 from dm_env import specs
 
-import dmc
-import utils
-from logger import Logger
-from replay_buffer import ReplayBufferStorage, make_replay_loader
-from video import TrainVideoRecorder, VideoRecorder
+import envs.dmc as dmc
+import utils.utils as utils
+from utils.logger import Logger
+from utils.replay_buffer import ReplayBufferStorage, make_replay_loader
+from utils.video import TrainVideoRecorder, VideoRecorder
 
 torch.backends.cudnn.benchmark = True
 
