@@ -261,10 +261,7 @@ class DrMAgent:
         
         if self.use_tb:
             with torch.no_grad():
-                # obs.detach() to prevent autograd tracking
-                actor_dormant_ratio = utils.compute_actor_dormant_ratio(self.actor, obs.detach(), tau=0.025)
-                critic_dormant_ratio = utils.compute_critic_dormant_ratio(self.critic, obs.detach(), action.detach(), tau=0.025)
-                metrics['actor_dormant_ratio'] = actor_dormant_ratio
-                metrics['critic_dormant_ratio'] = critic_dormant_ratio
+                actor_ratio = utils.calculate_dormant_ratio(self.actor, (obs.detach(), step), tau=0.025)
+                metrics['actor_dormant_ratio'] = actor_ratio
 
         return metrics

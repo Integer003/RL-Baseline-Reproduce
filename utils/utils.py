@@ -148,95 +148,53 @@ def schedule(schdl, step):
                 return (1.0 - mix) * final1 + mix * final2
     raise NotImplementedError(schdl)
 
-def compute_layer_dormant_ratio(layer, inputs, tau=0.01):
+def calculate_dormant_ratio(model, inputs, tau=0.01):
     """
-    Compute the dormant ratio for a single fully connected layer.
-    
+    Compute the τ-dormant ratio of a model following Algorithm 1 in the DrM paper.
+
     Args:
-        layer (nn.Module): The fully connected layer to analyze.
-        inputs (torch.Tensor): Input tensor of shape [batch_size, num_features].
-        tau (float): Threshold for determining dormant neurons.
+        model (nn.Module): PyTorch model (e.g., Actor, Critic).
+        inputs (Tensor): Input tensor for forward propagation.
+        tau (float): Dormant threshold.
+
+    Returns:
+        float: dormant ratio (dormant_neurons / total_neurons)
     """
+    # model.eval()
+    total_neurons = 0
+    dormant_neurons = 0
+    layer_outputs = []
+
+    # Hook to store the outputs of Linear layers
+    def save_output(module, input, output):
+        layer_outputs.append(output)
+
+    handles = []
+    # Register hooks on all nn.Linear layers
+    for module in model.modules():
+        if isinstance(module, nn.Linear):
+            handles.append(module.register_forward_hook(save_output))
+
+    # Forward pass
     with torch.no_grad():
-        outputs = layer(inputs)  # shape: [batch_size, num_neurons]
-        abs_outputs = outputs.abs()  # absolute activations
-        mean_per_neuron = abs_outputs.mean(dim=0)  # E_x |h_i(x)|, shape: [num_neurons]
+        _ = model(*inputs)
 
-        global_mean = mean_per_neuron.mean()  # average across neurons
-        scores = mean_per_neuron / (global_mean + 1e-8)
+    # Analyze outputs
+    for output in layer_outputs:
+        # Step 6: mean absolute activation over batch
+        mean_abs = output.abs().mean(dim=0)  # shape: [num_neurons]
+        # Step 7: mean across neurons
+        avg_output = mean_abs.mean()  # scalar
+        # Step 8: count neurons with low activation
+        dormant_count = (mean_abs < tau * avg_output).sum().item()
+        neuron_count = mean_abs.numel()
 
-        dormant_mask = scores <= tau
-        num_dormant = dormant_mask.sum().item()
-        total_neurons = outputs.shape[1]
+        dormant_neurons += dormant_count
+        total_neurons += neuron_count
 
-    return num_dormant, total_neurons
+    # Clean up hooks
+    for h in handles:
+        h.remove()
 
-def compute_actor_dormant_ratio(actor, dataset, tau=0.01):
-    """
-    Compute the dormant ratio for the Actor network.
-    `dataset` should be a torch.Tensor of shape [num_samples, repr_dim]
-    """
-    actor.eval()
-
-    trunk_input = dataset  # shape: [N, repr_dim]
-    with torch.no_grad():
-        trunk_output = actor.trunk(trunk_input)
-    
-    # Calculate dormant neurons in trunk
-    n_dormant_trunk, n_total_trunk = compute_layer_dormant_ratio(actor.trunk[0], trunk_input, tau)
-
-    # Policy layer 1
-    hidden1 = actor.policy[0](trunk_output)
-    n_dormant_p1, n_total_p1 = compute_layer_dormant_ratio(actor.policy[0], trunk_output, tau)
-
-    # Policy layer 2
-    hidden2 = actor.policy[2](F.relu(hidden1))
-    n_dormant_p2, n_total_p2 = compute_layer_dormant_ratio(actor.policy[2], F.relu(hidden1), tau)
-
-    total_dormant = n_dormant_trunk + n_dormant_p1 + n_dormant_p2
-    total_neurons = n_total_trunk + n_total_p1 + n_total_p2
-
-    beta_tau = total_dormant / total_neurons
-    return beta_tau
-
-def compute_critic_dormant_ratio(critic, obs_batch, action_batch, tau=0.01):
-    """
-    Compute the dormant ratio for the Critic network.
-    Args:
-        obs_batch: torch.Tensor of shape [N, repr_dim]
-        action_batch: torch.Tensor of shape [N, action_dim]
-    """
-    critic.eval()
-
-    # Trunk part
-    with torch.no_grad():
-        trunk_out = critic.trunk(obs_batch)
-
-    n_dormant_trunk, n_total_trunk = compute_layer_dormant_ratio(critic.trunk[0], obs_batch, tau)
-
-    # Q1 network
-    q1_input = torch.cat([trunk_out, action_batch], dim=-1)
-    q1_hidden1 = critic.Q1[0](q1_input)
-    q1_hidden1_relu = F.relu(q1_hidden1)
-    q1_hidden2 = critic.Q1[2](q1_hidden1_relu)
-
-    n_dormant_q1_0, n_total_q1_0 = compute_layer_dormant_ratio(critic.Q1[0], q1_input, tau)
-    n_dormant_q1_2, n_total_q1_2 = compute_layer_dormant_ratio(critic.Q1[2], q1_hidden1_relu, tau)
-
-    # Q2 network
-    q2_input = torch.cat([trunk_out, action_batch], dim=-1)
-    q2_hidden1 = critic.Q2[0](q2_input)
-    q2_hidden1_relu = F.relu(q2_hidden1)
-    q2_hidden2 = critic.Q2[2](q2_hidden1_relu)
-
-    n_dormant_q2_0, n_total_q2_0 = compute_layer_dormant_ratio(critic.Q2[0], q2_input, tau)
-    n_dormant_q2_2, n_total_q2_2 = compute_layer_dormant_ratio(critic.Q2[2], q2_hidden1_relu, tau)
-
-    # Sum all
-    total_dormant = (n_dormant_trunk + n_dormant_q1_0 + n_dormant_q1_2 +
-                     n_dormant_q2_0 + n_dormant_q2_2)
-    total_neurons = (n_total_trunk + n_total_q1_0 + n_total_q1_2 +
-                     n_total_q2_0 + n_total_q2_2)
-
-    beta_tau = total_dormant / total_neurons
-    return beta_tau
+    # Step 12: return ratio
+    return dormant_neurons / total_neurons if total_neurons > 0 else 0.0
