@@ -12,6 +12,8 @@ import torchvision
 from termcolor import colored
 from torch.utils.tensorboard import SummaryWriter
 
+import swanlab as wandb
+
 COMMON_TRAIN_FORMAT = [('frame', 'F', 'int'), ('step', 'S', 'int'),
                        ('episode', 'E', 'int'), ('episode_length', 'L', 'int'),
                        ('episode_reward', 'R', 'float'),
@@ -123,7 +125,7 @@ class MetersGroup(object):
 
 
 class Logger(object):
-    def __init__(self, log_dir, use_tb):
+    def __init__(self, log_dir, use_tb, use_wandb=True, project_name = "rl_reproduce", cfg=None):
         self._log_dir = log_dir
         self._train_mg = MetersGroup(log_dir / 'train.csv',
                                      formating=COMMON_TRAIN_FORMAT)
@@ -134,21 +136,38 @@ class Logger(object):
         else:
             self._sw = None
 
+        self._use_wandb = use_wandb
+        self.cfg = cfg
+        if use_wandb:
+            wandb.init(project=project_name, 
+                       dir=str(log_dir), 
+                       name=log_dir.name,
+                       config=cfg
+                       )
+        
     def _try_sw_log(self, key, value, step):
         if self._sw is not None:
             self._sw.add_scalar(key, value, step)
+    
+    def _try_wandb_log(self, key, value, step):
+        if self._use_wandb:
+            wandb.log({key: value}, step=step)
 
     def log(self, key, value, step):
         assert key.startswith('train') or key.startswith('eval')
         if type(value) == torch.Tensor:
             value = value.item()
         self._try_sw_log(key, value, step)
+        self._try_wandb_log(key, value, step)
         mg = self._train_mg if key.startswith('train') else self._eval_mg
         mg.log(key, value)
 
     def log_metrics(self, metrics, step, ty):
         for key, value in metrics.items():
             self.log(f'{ty}/{key}', value, step)
+        if self._use_wandb:
+            wandb_metrics = {f"{ty}/{key}": value for key, value in metrics.items()}
+            wandb.log(wandb_metrics, step=step)
 
     def dump(self, step, ty=None):
         if ty is None or ty == 'eval':

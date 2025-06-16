@@ -21,6 +21,7 @@ import utils.utils as utils
 from utils.logger import Logger
 from utils.replay_buffer import ReplayBufferStorage, make_replay_loader
 from utils.video import TrainVideoRecorder, VideoRecorder
+from omegaconf import OmegaConf
 
 torch.backends.cudnn.benchmark = True
 
@@ -50,7 +51,8 @@ class Workspace:
 
     def setup(self):
         # create logger
-        self.logger = Logger(self.work_dir, use_tb=self.cfg.use_tb)
+        cfg_dict = OmegaConf.to_container(self.cfg, resolve=True)
+        self.logger = Logger(self.work_dir, use_tb=self.cfg.use_tb, cfg=cfg_dict)
         # create envs
         self.train_env = dmc.make(self.cfg.task_name, self.cfg.frame_stack,
                                   self.cfg.action_repeat, self.cfg.seed)
