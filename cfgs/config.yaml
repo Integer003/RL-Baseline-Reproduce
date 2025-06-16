@@ -45,6 +45,7 @@ agent:
   feature_dim: ${feature_dim}
   stddev_schedule: ${stddev_schedule}
   stddev_clip: 0.3
+  perturb_frames: 200000
 
 hydra:
   run:

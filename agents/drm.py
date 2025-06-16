@@ -70,6 +70,7 @@ class Encoder(nn.Module):
 class Actor(nn.Module):
     def __init__(self, repr_dim, action_shape, feature_dim, hidden_dim):
         super().__init__()
+        self.__init_args__ = (repr_dim, action_shape, feature_dim, hidden_dim)
 
         self.trunk = nn.Sequential(nn.Linear(repr_dim, feature_dim),
                                    nn.LayerNorm(feature_dim), nn.Tanh())
@@ -124,7 +125,7 @@ class Critic(nn.Module):
 class DrMAgent:
     def __init__(self, obs_shape, action_shape, device, lr, feature_dim,
                  hidden_dim, critic_target_tau, num_expl_steps,
-                 update_every_steps, stddev_schedule, stddev_clip, use_tb):
+                 update_every_steps, stddev_schedule, stddev_clip, use_tb, perturb_frames):
         self.device = device
         self.critic_target_tau = critic_target_tau
         self.update_every_steps = update_every_steps
@@ -132,6 +133,7 @@ class DrMAgent:
         self.num_expl_steps = num_expl_steps
         self.stddev_schedule = stddev_schedule
         self.stddev_clip = stddev_clip
+        self.perturb_frames = perturb_frames
 
         # models
         self.encoder = Encoder(obs_shape).to(device)
@@ -263,5 +265,22 @@ class DrMAgent:
             with torch.no_grad():
                 actor_ratio = utils.calculate_dormant_ratio(self.actor, (obs.detach(), step), tau=0.025)
                 metrics['actor_dormant_ratio'] = actor_ratio
+                
+                # Calculate dormant ratio for critic
+                # Need to sample actions for critic input
+                stddev = utils.schedule(self.stddev_schedule, step)
+                dist = self.actor(obs, stddev)
+                sampled_action = dist.sample(clip=self.stddev_clip)
+                critic_ratio = utils.calculate_dormant_ratio(self.critic, (obs.detach(), sampled_action.detach()), tau=0.025)
+                metrics['critic_dormant_ratio'] = critic_ratio
+                
+                if step % self.perturb_frames == 0:
+                    self.actor, self.actor_opt = utils.perturb_network(
+                        self.actor, self.actor_opt, beta=actor_ratio,
+                        alpha_min=0.2, alpha_max=0.9, k=2.0
+                    )
+                    metrics['actor_perturbed'] = 1
+                else:
+                    metrics['actor_perturbed'] = 0
 
         return metrics

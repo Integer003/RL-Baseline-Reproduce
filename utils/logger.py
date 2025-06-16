@@ -142,7 +142,7 @@ class Logger(object):
             wandb.init(project=project_name, 
                        dir=str(log_dir), 
                        name=log_dir.name,
-                       config=cfg
+                       config=self.cfg
                        )
         
     def _try_sw_log(self, key, value, step):

@@ -14,6 +14,8 @@ from omegaconf import OmegaConf
 from torch import distributions as pyd
 from torch.distributions.utils import _standard_normal
 
+import copy
+import math
 
 class eval_mode:
     def __init__(self, *models):
@@ -198,3 +200,34 @@ def calculate_dormant_ratio(model, inputs, tau=0.01):
 
     # Step 12: return ratio
     return dormant_neurons / total_neurons if total_neurons > 0 else 0.0
+
+def perturb_network(network, optimizer, beta, alpha_min=0.2, alpha_max=0.9, k=2.0):
+    """
+    Perform dormant-ratio-guided soft weight reset on a network.
+    
+    Args:
+        network (nn.Module): Network to perturb.
+        optimizer (Optimizer): Optimizer to reset.
+        beta (float): Dormant ratio.
+        alpha_min (float): Minimum interpolation factor.
+        alpha_max (float): Maximum interpolation factor.
+        k (float): Perturbation rate.
+        
+    Returns:
+        nn.Module, Optimizer: Perturbed network and reset optimizer.
+    """
+    alpha = 1 - k * beta
+    alpha = max(alpha_min, min(alpha_max, alpha))  # clip(alpha, α_min, α_max)
+
+    new_net = copy.deepcopy(network.__class__.__new__(network.__class__))  # create empty network
+    new_net.__init__(*network.__init_args__)  # reinitialize weights (must store args)
+    new_net = new_net.to(next(network.parameters()).device)
+
+    with torch.no_grad():
+        for old_param, new_param in zip(network.parameters(), new_net.parameters()):
+            old_param.data.copy_(alpha * old_param.data + (1 - alpha) * new_param.data)
+
+    # Reset optimizer state
+    optimizer = type(optimizer)(network.parameters(), lr=optimizer.defaults['lr'])
+
+    return network, optimizer
