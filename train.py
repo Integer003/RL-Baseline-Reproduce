@@ -17,6 +17,8 @@ import torch
 from dm_env import specs
 
 import envs.dmc as dmc
+# import envs.adroit as adroit
+# import envs.mw as mw
 import utils.utils as utils
 from utils.logger import Logger
 from utils.replay_buffer import ReplayBufferStorage, make_replay_loader
@@ -50,12 +52,27 @@ class Workspace:
 
     def setup(self):
         # create logger
-        self.logger = Logger(self.work_dir, use_tb=self.cfg.use_tb)
+        self.logger = Logger(self.work_dir, use_tb=self.cfg.use_tb, use_wandb=self.cfg.use_wandb, project_name=self.cfg.wandb_project)
         # create envs
-        self.train_env = dmc.make(self.cfg.task_name, self.cfg.frame_stack,
-                                  self.cfg.action_repeat, self.cfg.seed)
-        self.eval_env = dmc.make(self.cfg.task_name, self.cfg.frame_stack,
-                                 self.cfg.action_repeat, self.cfg.seed)
+        if self.cfg.sim_env == 'dmc':
+            self.train_env = dmc.make(self.cfg.task_name, self.cfg.frame_stack,
+                                    self.cfg.action_repeat, self.cfg.seed)
+            self.eval_env = dmc.make(self.cfg.task_name, self.cfg.frame_stack,
+                                    self.cfg.action_repeat, self.cfg.seed)
+        # elif self.cfg.sim_env == 'adroit':
+        #     self.train_env = adroit.make(self.cfg.task_name, self.cfg.frame_stack,
+        #                                  self.cfg.action_repeat, self.cfg.seed)
+        #     self.eval_env = adroit.make(self.cfg.task_name, self.cfg.frame_stack,
+        #                                 self.cfg.action_repeat, self.cfg.seed)
+        # elif self.cfg.sim_env == 'metaworld':
+        #     self.train_env = mw.make(self.cfg.task_name, self.cfg.seed,
+        #                                     self.cfg.action_repeat,
+        #                                     self.cfg.seed)
+        #     self.eval_env = mw.make(self.cfg.task_name, self.cfg.seed,
+        #                                    self.cfg.action_repeat,
+        #                                    self.cfg.seed)
+        else:
+            raise ValueError(f'Unknown sim_env: {self.cfg.sim_env}')
         # create replay buffer
         data_specs = (self.train_env.observation_spec(),
                       self.train_env.action_spec(),

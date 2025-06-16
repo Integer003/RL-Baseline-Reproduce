@@ -28,3 +28,20 @@ dependencies:
     - sklearn==0.0
     - matplotlib==3.4.2
     - opencv-python==4.5.3.56
+
+# pip install mujoco
+# pip install scikit-image
+# pip install pytorch torchvision torchaudio
+# pip install hydra-core
+# pip install hydra-submitit-launcher
+# pip install termcolor
+# pip install dm_control
+# pip install mujoco
+# pip install imageio
+# pip install imageio-ffmpeg
+# pip install ipdb
+# pip install yapf
+# pip install mujoco_py
+# pip install sklearn
+# pip install matplotlib
+# pip install opencv-python

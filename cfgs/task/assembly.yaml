@@ -1,0 +1,7 @@
+defaults:
+  - medium
+  - _self_
+
+task_name: assembly
+# size: 84
+# camera: corner 

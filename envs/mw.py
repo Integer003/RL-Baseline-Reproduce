@@ -16,7 +16,7 @@ class MetaWorld:
         size=(64, 64),
         camera=None,
     ):
-        import metaworld
+        import envs.mw as mw
         from metaworld.envs import (
             ALL_V2_ENVIRONMENTS_GOAL_OBSERVABLE,
             ALL_V2_ENVIRONMENTS_GOAL_HIDDEN,
