@@ -190,7 +190,7 @@ class Critic(nn.Module):
 class DrQV2Agent:
     def __init__(self, obs_shape, action_shape, device, lr, feature_dim,
                  hidden_dim, critic_target_tau, num_expl_steps,
-                 update_every_steps, stddev_schedule, stddev_clip, use_tb, dr_tau):
+                 update_every_steps, stddev_schedule, stddev_clip, use_tb, dr_tau, use_perturbation, perturbation_interval, perturbation_rate, max_perturbation, min_perturbation):
         self.device = device
         self.critic_target_tau = critic_target_tau
         self.update_every_steps = update_every_steps
@@ -199,6 +199,11 @@ class DrQV2Agent:
         self.stddev_schedule = stddev_schedule
         self.stddev_clip = stddev_clip
         self.dr_tau = dr_tau
+        self.use_perturbation = use_perturbation
+        self.perturbation_interval = perturbation_interval
+        self.perturbation_rate = perturbation_rate
+        self.max_perturbation = max_perturbation
+        self.min_perturbation = min_perturbation
 
         # models
         self.encoder = Encoder(obs_shape).to(device)
@@ -270,6 +275,9 @@ class DrQV2Agent:
 
         return metrics
 
+    def calculate_alpha_perturbation(self, beta):
+        return np.clip(1.0 - beta * self.perturbation_rate, self.min_perturbation, self.max_perturbation)
+
     def update_actor(self, obs, step):
         metrics = dict()
 
@@ -286,6 +294,15 @@ class DrQV2Agent:
         self.actor_opt.zero_grad(set_to_none=True)
         actor_loss.backward()
         self.actor_opt.step()
+
+        if self.use_perturbation and step % self.perturbation_interval == 0:
+            alpha = self.calculate_alpha_perturbation(beta.item())
+            with torch.no_grad():
+                for param in self.actor.parameters():
+                    # random_param = torch.empty_like(param).uniform_(-1.0, 1.0)
+                    random_param = torch.empty_like(param)
+                    utils.weight_init(random_param)
+                    param.data.copy_(alpha * param.data + (1 - alpha) * random_param)
 
         if self.use_tb:
             metrics['actor_loss'] = actor_loss.item()

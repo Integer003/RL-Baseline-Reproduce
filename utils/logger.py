@@ -145,7 +145,7 @@ class Logger(object):
             self._sw.add_scalar(key, value, step)
     
     def _try_wandb_log(self, key, value, step):
-        if self._use_wandb:
+        if self._use_wandb and step % 100 == 0:
             wandb.log({key: value}, step=step)
 
     def log(self, key, value, step):

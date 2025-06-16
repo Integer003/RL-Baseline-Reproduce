@@ -38,12 +38,6 @@ feature_dim: 50
 
 agent:
   _target_: agents.drm.DrQV2Agent
-  dr_tau : 0.025
-  use_perturbation: true
-  perturbation_interval: 200000
-  perturbation_rate: 2
-  max_perturbation: 0.9
-  min_perturbation: 0.2
   obs_shape: ??? # to be specified later
   action_shape: ??? # to be specified later
   device: ${device}
