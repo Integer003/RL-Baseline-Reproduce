@@ -94,29 +94,70 @@ class Encoder(nn.Module):
 
 
 class Actor(nn.Module):
-    def __init__(self, repr_dim, action_shape, feature_dim, hidden_dim):
+    def __init__(self, repr_dim, action_shape, feature_dim, hidden_dim, dr_tau):
         super().__init__()
 
         self.trunk = nn.Sequential(nn.Linear(repr_dim, feature_dim),
                                    nn.LayerNorm(feature_dim), nn.Tanh())
 
-        self.policy = nn.Sequential(nn.Linear(feature_dim, hidden_dim),
-                                    nn.ReLU(inplace=True),
-                                    nn.Linear(hidden_dim, hidden_dim),
-                                    nn.ReLU(inplace=True),
-                                    nn.Linear(hidden_dim, action_shape[0]))
+        # self.policy = nn.Sequential(nn.Linear(feature_dim, hidden_dim),
+        #                             nn.ReLU(inplace=True),
+        #                             nn.Linear(hidden_dim, hidden_dim),
+        #                             nn.ReLU(inplace=True),
+        #                             nn.Linear(hidden_dim, action_shape[0]))
+        
+        self.policy_linear1 = nn.Linear(feature_dim, hidden_dim)
+        self.policy_linear2 = nn.Linear(hidden_dim, hidden_dim)
+        self.policy_linear3 = nn.Linear(hidden_dim, action_shape[0])
+        self.policy_activation = nn.ReLU(inplace=True)
 
         self.apply(utils.weight_init)
 
-    def forward(self, obs, std):
+        self.dr_tau = dr_tau
+        self.feature_dim = feature_dim
+        self.hidden_dim = hidden_dim
+        self.action_shape = action_shape
+
+    def get_dormant_count(self, mu):
+        # calculate the dormant ratio & number of dormant neurons
+
+        mu = torch.absolute(mu)
+        mu = mu.mean(dim=0)
+        mean_mu = mu.mean()
+
+        H = (mu < mean_mu * self.dr_tau).float().sum()
+        return H
+
+
+    def forward(self, obs, std, calculate_beta=False):
+        dormant_count = 0
+
         h = self.trunk(obs)
+        if calculate_beta:
+            dormant_count += self.get_dormant_count(h)
 
-        mu = self.policy(h)
+        # mu = self.policy(h)
+        mu = self.policy_activation(self.policy_linear1(h))
+        if calculate_beta:
+            dormant_count += self.get_dormant_count(mu)
+
+        mu = self.policy_activation(self.policy_linear2(mu))
+        if calculate_beta:
+            dormant_count += self.get_dormant_count(mu)
+
+        mu = self.policy_linear3(mu)
         mu = torch.tanh(mu)
-        std = torch.ones_like(mu) * std
+        if calculate_beta:
+            dormant_count += self.get_dormant_count(mu)
 
+        std = torch.ones_like(mu) * std
         dist = utils.TruncatedNormal(mu, std)
-        return dist
+
+        if not calculate_beta:
+            return dist
+        beta = dormant_count / (self.feature_dim + self.hidden_dim * 2 + self.action_shape[0])
+        return dist, beta
+    
 
 class Critic(nn.Module):
     def __init__(self, repr_dim, action_shape, feature_dim, hidden_dim):
@@ -149,7 +190,7 @@ class Critic(nn.Module):
 class DrQV2Agent:
     def __init__(self, obs_shape, action_shape, device, lr, feature_dim,
                  hidden_dim, critic_target_tau, num_expl_steps,
-                 update_every_steps, stddev_schedule, stddev_clip, use_tb):
+                 update_every_steps, stddev_schedule, stddev_clip, use_tb, dr_tau):
         self.device = device
         self.critic_target_tau = critic_target_tau
         self.update_every_steps = update_every_steps
@@ -157,11 +198,12 @@ class DrQV2Agent:
         self.num_expl_steps = num_expl_steps
         self.stddev_schedule = stddev_schedule
         self.stddev_clip = stddev_clip
+        self.dr_tau = dr_tau
 
         # models
         self.encoder = Encoder(obs_shape).to(device)
         self.actor = Actor(self.encoder.repr_dim, action_shape, feature_dim,
-                           hidden_dim).to(device)
+                           hidden_dim, self.dr_tau).to(device)
 
         self.critic = Critic(self.encoder.repr_dim, action_shape, feature_dim,
                              hidden_dim).to(device)
@@ -232,7 +274,7 @@ class DrQV2Agent:
         metrics = dict()
 
         stddev = utils.schedule(self.stddev_schedule, step)
-        dist = self.actor(obs, stddev)
+        dist, beta = self.actor(obs, stddev, calculate_beta=True)
         action = dist.sample(clip=self.stddev_clip)
         log_prob = dist.log_prob(action).sum(-1, keepdim=True)
         Q1, Q2 = self.critic(obs, action)
@@ -249,6 +291,7 @@ class DrQV2Agent:
             metrics['actor_loss'] = actor_loss.item()
             metrics['actor_logprob'] = log_prob.mean().item()
             metrics['actor_ent'] = dist.entropy().sum(dim=-1).mean().item()
+            metrics['actor_beta'] = beta.item()
 
         return metrics
 
