@@ -37,7 +37,7 @@ lr: 1e-4
 feature_dim: 50
 
 agent:
-  _target_: agents.drm.DrQV2Agent
+  _target_: agents.drqv2.DrQV2Agent
   obs_shape: ??? # to be specified later
   action_shape: ??? # to be specified later
   device: ${device}

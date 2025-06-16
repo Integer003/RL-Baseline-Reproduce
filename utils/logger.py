@@ -125,7 +125,7 @@ class MetersGroup(object):
 
 
 class Logger(object):
-    def __init__(self, log_dir, use_tb, use_wandb=True, project_name = "rl_reproduce"):
+    def __init__(self, log_dir, use_tb, use_wandb=True, project_name = "rl_reproduce", cfg=None):
         self._log_dir = log_dir
         self._train_mg = MetersGroup(log_dir / 'train.csv',
                                      formating=COMMON_TRAIN_FORMAT)
@@ -138,7 +138,12 @@ class Logger(object):
 
         self._use_wandb = use_wandb
         if use_wandb:
-            wandb.init(project=project_name, dir=str(log_dir), name=log_dir.name)
+            assert cfg is not None, "Config must be provided for wandb logging"
+            if hasattr(cfg, 'to_container'):
+                cfg = cfg.to_container(resolve=True)
+            elif hasattr(cfg, 'items'):
+                cfg = dict(cfg)
+            wandb.init(project=project_name, dir=str(log_dir), name=log_dir.name, config=cfg)
         
     def _try_sw_log(self, key, value, step):
         if self._sw is not None:

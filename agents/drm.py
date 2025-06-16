@@ -128,36 +128,30 @@ class Actor(nn.Module):
         H = (mu < mean_mu * self.dr_tau).float().sum()
         return H
 
-
-    def forward(self, obs, std, calculate_beta=False):
+    def forward(self, obs):
         dormant_count = 0
 
         h = self.trunk(obs)
-        if calculate_beta:
-            dormant_count += self.get_dormant_count(h)
+        dormant_count += self.get_dormant_count(h)
 
-        # mu = self.policy(h)
         mu = self.policy_activation(self.policy_linear1(h))
-        if calculate_beta:
-            dormant_count += self.get_dormant_count(mu)
+        dormant_count += self.get_dormant_count(mu)
 
         mu = self.policy_activation(self.policy_linear2(mu))
-        if calculate_beta:
-            dormant_count += self.get_dormant_count(mu)
+        dormant_count += self.get_dormant_count(mu)
 
         mu = self.policy_linear3(mu)
         mu = torch.tanh(mu)
-        if calculate_beta:
-            dormant_count += self.get_dormant_count(mu)
+        dormant_count += self.get_dormant_count(mu)
 
-        std = torch.ones_like(mu) * std
-        dist = utils.TruncatedNormal(mu, std)
-
-        if not calculate_beta:
-            return dist
         beta = dormant_count / (self.feature_dim + self.hidden_dim * 2 + self.action_shape[0])
-        return dist, beta
-    
+
+        return mu, beta
+
+def get_action_distribution(mu, std):
+    std = torch.ones_like(mu) * std
+    dist = utils.TruncatedNormal(mu, std)
+    return dist
 
 class Critic(nn.Module):
     def __init__(self, repr_dim, action_shape, feature_dim, hidden_dim):
@@ -190,7 +184,7 @@ class Critic(nn.Module):
 class DrQV2Agent:
     def __init__(self, obs_shape, action_shape, device, lr, feature_dim,
                  hidden_dim, critic_target_tau, num_expl_steps,
-                 update_every_steps, stddev_schedule, stddev_clip, use_tb, dr_tau, use_perturbation, perturbation_interval, perturbation_rate, max_perturbation, min_perturbation):
+                 update_every_steps, stddev_schedule, stddev_clip, use_tb, dr_tau, use_perturbation, perturbation_interval, perturbation_rate, max_perturbation, min_perturbation, beta_threshold, exploration_temperature, use_drg_exploration):
         self.device = device
         self.critic_target_tau = critic_target_tau
         self.update_every_steps = update_every_steps
@@ -204,6 +198,9 @@ class DrQV2Agent:
         self.perturbation_rate = perturbation_rate
         self.max_perturbation = max_perturbation
         self.min_perturbation = min_perturbation
+        self.beta_threshold = beta_threshold
+        self.exploration_temperature = exploration_temperature
+        self.use_drg_exploration = use_drg_exploration
 
         # models
         self.encoder = Encoder(obs_shape).to(device)
@@ -233,11 +230,24 @@ class DrQV2Agent:
         self.actor.train(training)
         self.critic.train(training)
 
+    def get_stddev(self, step, beta):
+        beta = beta.item() if isinstance(beta, torch.Tensor) else beta
+        if self.use_drg_exploration:
+            stddev_0 = utils.schedule(self.stddev_schedule, step)
+            stddev = 1 / (1 + np.exp(-(beta - self.beta_threshold) / self.exploration_temperature))
+            if beta < self.beta_threshold:
+                stddev = np.max([stddev, stddev_0])
+        else:
+            stddev = utils.schedule(self.stddev_schedule, step)
+        return stddev
+
+
     def act(self, obs, step, eval_mode):
         obs = torch.as_tensor(obs, device=self.device)
         obs = self.encoder(obs.unsqueeze(0))
-        stddev = utils.schedule(self.stddev_schedule, step)
-        dist = self.actor(obs, stddev)
+        mu, beta = self.actor(obs)
+        stddev = self.get_stddev(step, beta)
+        dist = get_action_distribution(mu, stddev)
         if eval_mode:
             action = dist.mean
         else:
@@ -250,8 +260,9 @@ class DrQV2Agent:
         metrics = dict()
 
         with torch.no_grad():
-            stddev = utils.schedule(self.stddev_schedule, step)
-            dist = self.actor(next_obs, stddev)
+            mu, beta = self.actor(next_obs)
+            stddev = self.get_stddev(step, beta)
+            dist = get_action_distribution(mu, stddev)
             next_action = dist.sample(clip=self.stddev_clip)
             target_Q1, target_Q2 = self.critic_target(next_obs, next_action)
             target_V = torch.min(target_Q1, target_Q2)
@@ -281,8 +292,9 @@ class DrQV2Agent:
     def update_actor(self, obs, step):
         metrics = dict()
 
-        stddev = utils.schedule(self.stddev_schedule, step)
-        dist, beta = self.actor(obs, stddev, calculate_beta=True)
+        mu, beta = self.actor(obs)
+        stddev = self.get_stddev(step, beta)
+        dist = get_action_distribution(mu, stddev)
         action = dist.sample(clip=self.stddev_clip)
         log_prob = dist.log_prob(action).sum(-1, keepdim=True)
         Q1, Q2 = self.critic(obs, action)

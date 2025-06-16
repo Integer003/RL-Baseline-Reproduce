@@ -18,7 +18,7 @@ from dm_env import specs
 
 import envs.dmc as dmc
 # import envs.adroit as adroit
-# import envs.mw as mw
+import envs.mw as mw
 import utils.utils as utils
 from utils.logger import Logger
 from utils.replay_buffer import ReplayBufferStorage, make_replay_loader
@@ -27,9 +27,7 @@ from utils.video import TrainVideoRecorder, VideoRecorder
 torch.backends.cudnn.benchmark = True
 
 
-def make_agent(obs_spec, action_spec, cfg):
-    cfg.obs_shape = obs_spec.shape
-    cfg.action_shape = action_spec.shape
+def make_agent(cfg):
     return hydra.utils.instantiate(cfg)
 
 
@@ -43,16 +41,12 @@ class Workspace:
         self.device = torch.device(cfg.device)
         self.setup()
 
-        self.agent = make_agent(self.train_env.observation_spec(),
-                                self.train_env.action_spec(),
-                                self.cfg.agent)
+        self.agent = make_agent(self.cfg.agent)
         self.timer = utils.Timer()
         self._global_step = 0
         self._global_episode = 0
 
     def setup(self):
-        # create logger
-        self.logger = Logger(self.work_dir, use_tb=self.cfg.use_tb, use_wandb=self.cfg.use_wandb, project_name=self.cfg.wandb_project)
         # create envs
         if self.cfg.sim_env == 'dmc':
             self.train_env = dmc.make(self.cfg.task_name, self.cfg.frame_stack,
@@ -64,15 +58,21 @@ class Workspace:
         #                                  self.cfg.action_repeat, self.cfg.seed)
         #     self.eval_env = adroit.make(self.cfg.task_name, self.cfg.frame_stack,
         #                                 self.cfg.action_repeat, self.cfg.seed)
-        # elif self.cfg.sim_env == 'metaworld':
-        #     self.train_env = mw.make(self.cfg.task_name, self.cfg.seed,
-        #                                     self.cfg.action_repeat,
-        #                                     self.cfg.seed)
-        #     self.eval_env = mw.make(self.cfg.task_name, self.cfg.seed,
-        #                                    self.cfg.action_repeat,
-        #                                    self.cfg.seed)
+        elif self.cfg.sim_env == 'metaworld':
+            self.train_env = mw.make(self.cfg.task_name, self.cfg.seed,
+                                            self.cfg.action_repeat,
+                                            self.cfg.seed)
+            self.eval_env = mw.make(self.cfg.task_name, self.cfg.seed,
+                                           self.cfg.action_repeat,
+                                           self.cfg.seed)
         else:
             raise ValueError(f'Unknown sim_env: {self.cfg.sim_env}')
+        
+        # create logger
+        self.cfg.agent.obs_shape = self.train_env.observation_spec().shape
+        self.cfg.agent.action_shape = self.train_env.action_spec().shape
+        self.logger = Logger(self.work_dir, use_tb=self.cfg.use_tb, use_wandb=self.cfg.use_wandb, project_name=self.cfg.wandb_project, cfg=self.cfg)
+
         # create replay buffer
         data_specs = (self.train_env.observation_spec(),
                       self.train_env.action_spec(),
