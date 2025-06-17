@@ -31,11 +31,7 @@ class RandomShiftsAug(nn.Module):
         base_grid = torch.cat([arange, arange.transpose(1, 0)], dim=2)
         base_grid = base_grid.unsqueeze(0).repeat(n, 1, 1, 1)
 
-        shift = torch.randint(0,
-                              2 * self.pad + 1,
-                              size=(n, 1, 1, 2),
-                              device=x.device,
-                              dtype=x.dtype)
+        shift = torch.randint(0, 2 * self.pad + 1, size=(n, 1, 1, 2), device=x.device, dtype=x.dtype)
         shift *= 2.0 / (h + 2 * self.pad)
 
         grid = base_grid + shift
@@ -277,7 +273,7 @@ class DrQV2Agent:
                 if self.awaken_step is None:
                     self.awaken_step = step
                 stddev_0 = utils.schedule(self.stddev_schedule, step - self.awaken_step)
-                stddev = np.min([stddev, stddev_0])
+                stddev = np.max([stddev, stddev_0])
         else:
             stddev = utils.schedule(self.stddev_schedule, step)
         return stddev
@@ -381,17 +377,14 @@ class DrQV2Agent:
     def update_evaluator(self, obs, action, step):
         metrics = dict()
 
-        value = self.evaluator(obs)
-        # Target for evaluator: use critic's Q estimate as target
         with torch.no_grad():
-            mu, beta = self.actor(obs)
-            stddev = self.get_stddev(step, beta)
-            dist = get_action_distribution(mu, stddev)
-            action = dist.sample(clip=self.stddev_clip)
             Q1, Q2 = self.critic(obs, action)
-            target_value = torch.min(Q1, Q2)
+            Q = torch.min(Q1, Q2)
 
-        evaluator_loss = F.mse_loss(value, target_value)
+        V = self.evaluator(obs)
+        weights = torch.where(V > Q, torch.ones_like(V) * (1 - self.exploitation_expectile), torch.ones_like(V) * self.exploitation_expectile)
+        evaluator_loss = (F.mse_loss(V, Q, reduction='none') * weights).mean()
+
 
         self.evaluator_opt.zero_grad(set_to_none=True)
         evaluator_loss.backward()
@@ -399,7 +392,7 @@ class DrQV2Agent:
 
         if self.use_tb:
             metrics['evaluator_loss'] = evaluator_loss.item()
-            metrics['evaluator_value'] = value.mean().item()
+            metrics['evaluator_value'] = V.mean().item()
 
         return metrics
 
