@@ -180,11 +180,33 @@ class Critic(nn.Module):
 
         return q1, q2
 
+class Evaluator(nn.Module):
+    def __init__(self, repr_dim, feature_dim, hidden_dim):
+        super().__init__()
+
+        self.trunk = nn.Sequential(nn.Linear(repr_dim, feature_dim),
+                                   nn.LayerNorm(feature_dim), nn.Tanh())
+
+        self.value = nn.Sequential(nn.Linear(feature_dim, hidden_dim),
+                                    nn.ReLU(inplace=True),
+                                    nn.Linear(hidden_dim, hidden_dim),
+                                    nn.ReLU(inplace=True),
+                                    nn.Linear(hidden_dim, 1))
+
+        self.apply(utils.weight_init)
+
+    def forward(self, obs):
+        h = self.trunk(obs)
+
+        value = self.value(h)
+
+        return value
+
 
 class DrQV2Agent:
     def __init__(self, obs_shape, action_shape, device, lr, feature_dim,
                  hidden_dim, critic_target_tau, num_expl_steps,
-                 update_every_steps, stddev_schedule, stddev_clip, use_tb, dr_tau, use_perturbation, perturbation_interval, perturbation_rate, max_perturbation, min_perturbation, beta_threshold, exploration_temperature, use_drg_exploration):
+                 update_every_steps, stddev_schedule, stddev_clip, use_tb, dr_tau, use_perturbation, perturbation_interval, perturbation_rate, max_perturbation, min_perturbation, beta_threshold, exploration_temperature, use_drg_exploration, use_drg_exploitation, exploitation_temperature, exploitation_expectile, max_exploitation_lambda):
         self.device = device
         self.critic_target_tau = critic_target_tau
         self.update_every_steps = update_every_steps
@@ -192,6 +214,11 @@ class DrQV2Agent:
         self.num_expl_steps = num_expl_steps
         self.stddev_schedule = stddev_schedule
         self.stddev_clip = stddev_clip
+        self.action_shape = action_shape
+        self.feature_dim = feature_dim
+        self.hidden_dim = hidden_dim
+        self.device = device
+
         self.dr_tau = dr_tau
         self.use_perturbation = use_perturbation
         self.perturbation_interval = perturbation_interval
@@ -201,6 +228,11 @@ class DrQV2Agent:
         self.beta_threshold = beta_threshold
         self.exploration_temperature = exploration_temperature
         self.use_drg_exploration = use_drg_exploration
+        self.awaken_step = None
+        self.use_drg_exploitation = use_drg_exploitation
+        self.exploitation_temperature = exploitation_temperature
+        self.exploitation_expectile = exploitation_expectile
+        self.max_exploitation_lambda = max_exploitation_lambda
 
         # models
         self.encoder = Encoder(obs_shape).to(device)
@@ -213,33 +245,47 @@ class DrQV2Agent:
                                     feature_dim, hidden_dim).to(device)
         self.critic_target.load_state_dict(self.critic.state_dict())
 
+        self.evaluator = Evaluator(self.encoder.repr_dim, feature_dim, hidden_dim).to(device)
+
         # optimizers
         self.encoder_opt = torch.optim.Adam(self.encoder.parameters(), lr=lr)
         self.actor_opt = torch.optim.Adam(self.actor.parameters(), lr=lr)
         self.critic_opt = torch.optim.Adam(self.critic.parameters(), lr=lr)
+        self.evaluator_opt = torch.optim.Adam(self.evaluator.parameters(), lr=lr)
 
         # data augmentation
         self.aug = RandomShiftsAug(pad=4)
 
         self.train()
-        self.critic_target.train()
 
     def train(self, training=True):
         self.training = training
         self.encoder.train(training)
         self.actor.train(training)
         self.critic.train(training)
+        self.critic_target.train()
+        self.evaluator.train(training)
 
-    def get_stddev(self, step, beta):
+    def calculate_alpha_perturbation(self, beta):
+        return np.clip(1.0 - beta * self.perturbation_rate, self.min_perturbation, self.max_perturbation)
+
+    def get_stddev(self, step, beta): # for exploration
         beta = beta.item() if isinstance(beta, torch.Tensor) else beta
         if self.use_drg_exploration:
-            stddev_0 = utils.schedule(self.stddev_schedule, step)
             stddev = 1 / (1 + np.exp(-(beta - self.beta_threshold) / self.exploration_temperature))
-            if beta < self.beta_threshold:
-                stddev = np.max([stddev, stddev_0])
+            if beta < self.beta_threshold and step > self.num_expl_steps:
+                if self.awaken_step is None:
+                    self.awaken_step = step
+                stddev_0 = utils.schedule(self.stddev_schedule, step - self.awaken_step)
+                stddev = np.min([stddev, stddev_0])
         else:
             stddev = utils.schedule(self.stddev_schedule, step)
         return stddev
+    
+    def get_lambda_exploitation(self, beta):
+        beta = beta.item() if isinstance(beta, torch.Tensor) else beta
+        lambda_exploitation = self.max_exploitation_lambda / (1 + np.exp(-(beta - self.beta_threshold) / self.exploitation_temperature))
+        return lambda_exploitation
 
 
     def act(self, obs, step, eval_mode):
@@ -265,8 +311,14 @@ class DrQV2Agent:
             dist = get_action_distribution(mu, stddev)
             next_action = dist.sample(clip=self.stddev_clip)
             target_Q1, target_Q2 = self.critic_target(next_obs, next_action)
-            target_V = torch.min(target_Q1, target_Q2)
-            target_Q = reward + (discount * target_V)
+            target_V_0 = torch.min(target_Q1, target_Q2)
+            if self.use_drg_exploitation:
+                target_V_1 = self.evaluator(next_obs)
+                lambda_exploitation = self.get_lambda_exploitation(beta)
+                target_V = lambda_exploitation * target_V_0 + (1 - lambda_exploitation) * target_V_1
+                target_Q = reward + (discount * target_V).detach()
+            else:
+                target_Q = reward + (discount * target_V_0).detach()
 
         Q1, Q2 = self.critic(obs, action)
         critic_loss = F.mse_loss(Q1, target_Q) + F.mse_loss(Q2, target_Q)
@@ -286,9 +338,6 @@ class DrQV2Agent:
 
         return metrics
 
-    def calculate_alpha_perturbation(self, beta):
-        return np.clip(1.0 - beta * self.perturbation_rate, self.min_perturbation, self.max_perturbation)
-
     def update_actor(self, obs, step):
         metrics = dict()
 
@@ -307,20 +356,50 @@ class DrQV2Agent:
         actor_loss.backward()
         self.actor_opt.step()
 
+        # do perturbation on actor
         if self.use_perturbation and step % self.perturbation_interval == 0:
             alpha = self.calculate_alpha_perturbation(beta.item())
-            with torch.no_grad():
-                for param in self.actor.parameters():
-                    # random_param = torch.empty_like(param).uniform_(-1.0, 1.0)
-                    random_param = torch.empty_like(param)
-                    utils.weight_init(random_param)
-                    param.data.copy_(alpha * param.data + (1 - alpha) * random_param)
+            self.random_actor = Actor(self.encoder.repr_dim, self.action_shape, self.feature_dim, self.hidden_dim, self.dr_tau).to(self.device)
+            for param, random_param in zip(self.actor.parameters(), self.random_actor.parameters()):
+                if param.requires_grad:
+                    param.data.copy_(alpha * param.data + (1 - alpha) * random_param.data)
+            # with torch.no_grad():
+            #     for param in self.actor.parameters():
+            #         # random_param = torch.empty_like(param).uniform_(-1.0, 1.0)
+            #         random_param = torch.empty_like(param)
+            #         utils.weight_init(random_param)
+            #         param.data.copy_(alpha * param.data + (1 - alpha) * random_param)
 
         if self.use_tb:
             metrics['actor_loss'] = actor_loss.item()
             metrics['actor_logprob'] = log_prob.mean().item()
             metrics['actor_ent'] = dist.entropy().sum(dim=-1).mean().item()
             metrics['actor_beta'] = beta.item()
+
+        return metrics
+    
+    def update_evaluator(self, obs, action, step):
+        metrics = dict()
+
+        value = self.evaluator(obs)
+        # Target for evaluator: use critic's Q estimate as target
+        with torch.no_grad():
+            mu, beta = self.actor(obs)
+            stddev = self.get_stddev(step, beta)
+            dist = get_action_distribution(mu, stddev)
+            action = dist.sample(clip=self.stddev_clip)
+            Q1, Q2 = self.critic(obs, action)
+            target_value = torch.min(Q1, Q2)
+
+        evaluator_loss = F.mse_loss(value, target_value)
+
+        self.evaluator_opt.zero_grad(set_to_none=True)
+        evaluator_loss.backward()
+        self.evaluator_opt.step()
+
+        if self.use_tb:
+            metrics['evaluator_loss'] = evaluator_loss.item()
+            metrics['evaluator_value'] = value.mean().item()
 
         return metrics
 
@@ -351,6 +430,10 @@ class DrQV2Agent:
 
         # update actor
         metrics.update(self.update_actor(obs.detach(), step))
+
+        # update evaluator
+        if self.use_drg_exploitation:
+            metrics.update(self.update_evaluator(obs.detach(), action, step))
 
         # update critic target
         utils.soft_update_params(self.critic, self.critic_target,

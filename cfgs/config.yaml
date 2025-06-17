@@ -1,7 +1,7 @@
 defaults:
   - _self_
-  # - task@_global_: hopper_hop
-  - task@_global_: quadruped_walk
+  - task@_global_: hopper_hop
+  # - task@_global_: quadruped_walk
   # - task@_global_: assembly
   - override hydra/launcher: submitit_local
 
@@ -43,13 +43,17 @@ agent:
   # drm settings
   dr_tau : 0.025
   use_perturbation: true
-  perturbation_interval: 200000
+  perturbation_interval: 5000
   perturbation_rate: 2
   max_perturbation: 0.9
   min_perturbation: 0.2
   use_drg_exploration: true
-  beta_threshold: 0.5
+  beta_threshold: 0.2
   exploration_temperature: 0.1
+  use_drg_exploitation: true
+  exploitation_temperature: 0.02
+  exploitation_expectile: 0.9
+  max_exploitation_lambda: 0.6
   # basic settings
   obs_shape: ??? # to be specified later
   action_shape: ??? # to be specified later
