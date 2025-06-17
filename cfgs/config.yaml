@@ -20,7 +20,7 @@ replay_buffer_num_workers: 4
 nstep: 3
 batch_size: 256
 # misc
-seed: 1
+seed: 3  # [1, 2, 3]
 device: cuda
 save_video: true
 save_train_video: false
@@ -45,7 +45,11 @@ agent:
   feature_dim: ${feature_dim}
   stddev_schedule: ${stddev_schedule}
   stddev_clip: 0.3
-  perturb_frames: 200000
+  perturb_frames: 3200000
+  dormant_ratio_threshold: 0.2
+  temp: 0.1
+  expectile: 0.9
+  lambda_mix: 0.6
 
 hydra:
   run:

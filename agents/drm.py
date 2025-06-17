@@ -9,6 +9,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 import utils.utils as utils
+import math
 
 
 class RandomShiftsAug(nn.Module):
@@ -125,7 +126,10 @@ class Critic(nn.Module):
 class DrMAgent:
     def __init__(self, obs_shape, action_shape, device, lr, feature_dim,
                  hidden_dim, critic_target_tau, num_expl_steps,
-                 update_every_steps, stddev_schedule, stddev_clip, use_tb, perturb_frames):
+                 update_every_steps, stddev_schedule, stddev_clip, use_tb, 
+                 perturb_frames, 
+                 dormant_ratio_threshold, temp,
+                 expectile, lambda_mix):
         self.device = device
         self.critic_target_tau = critic_target_tau
         self.update_every_steps = update_every_steps
@@ -134,6 +138,12 @@ class DrMAgent:
         self.stddev_schedule = stddev_schedule
         self.stddev_clip = stddev_clip
         self.perturb_frames = perturb_frames
+        self.awaken_step = None
+        self.dormant_ratio_threshold = dormant_ratio_threshold
+        self.temp = temp
+        self.actor_ratio = 0.5  # init. Not that important.
+        self.expectile = expectile
+        self.lambda_mix = lambda_mix
 
         # models
         self.encoder = Encoder(obs_shape).to(device)
@@ -145,17 +155,40 @@ class DrMAgent:
         self.critic_target = Critic(self.encoder.repr_dim, action_shape,
                                     feature_dim, hidden_dim).to(device)
         self.critic_target.load_state_dict(self.critic.state_dict())
+        self.vnet = nn.Sequential(
+            nn.Linear(self.encoder.repr_dim, feature_dim),
+            nn.ReLU(),
+            nn.Linear(feature_dim, 1)
+        ).to(device)
 
         # optimizers
         self.encoder_opt = torch.optim.Adam(self.encoder.parameters(), lr=lr)
         self.actor_opt = torch.optim.Adam(self.actor.parameters(), lr=lr)
         self.critic_opt = torch.optim.Adam(self.critic.parameters(), lr=lr)
+        self.vnet_opt = torch.optim.Adam(self.vnet.parameters(), lr=lr)
 
         # data augmentation
         self.aug = RandomShiftsAug(pad=4)
 
         self.train()
         self.critic_target.train()
+        
+    def compute_dormant_stddev(self, beta):
+        # Compute stddev in dormant phase based on dormant ratio
+        return 1.0 / (1.0 + math.exp(-(beta - self.dormant_ratio_threshold) / self.temp))
+
+    def compute_stddev(self, step):
+        # STDDEV function
+        if self.awaken_step is None:
+            return self.compute_dormant_stddev(self.actor_ratio)
+        else:
+            linear_stddev = utils.schedule(self.stddev_schedule, step - self.awaken_step)
+            return max(self.compute_dormant_stddev(self.actor_ratio), linear_stddev)
+
+    def update_awaken_step(self, step, dormant_ratio):
+        # UPDATE AWAKEN STEP function
+        if self.awaken_step is None and dormant_ratio < self.dormant_ratio_threshold:
+            self.awaken_step = step
 
     def train(self, training=True):
         self.training = training
@@ -166,7 +199,8 @@ class DrMAgent:
     def act(self, obs, step, eval_mode):
         obs = torch.as_tensor(obs, device=self.device)
         obs = self.encoder(obs.unsqueeze(0))
-        stddev = utils.schedule(self.stddev_schedule, step)
+        # stddev = utils.schedule(self.stddev_schedule, step)
+        stddev = self.compute_stddev(step)  # trick 2
         dist = self.actor(obs, stddev)
         if eval_mode:
             action = dist.mean
@@ -175,17 +209,65 @@ class DrMAgent:
             if step < self.num_expl_steps:
                 action.uniform_(-1.0, 1.0)
         return action.cpu().numpy()[0]
+    
+    def update_value_network(self, obs, action):
+        metrics = dict()
+        
+        with torch.no_grad():
+            Q1, Q2 = self.critic(obs, action)
+            Q = torch.min(Q1, Q2)
+
+        V = self.vnet(obs)
+        error = V - Q
+
+        # Create weight mask based on error sign
+        weight = torch.where(
+            error > 0,
+            (1.0 - self.expectile),
+            self.expectile
+        )
+        value_loss = (weight * error.pow(2)).mean()
+
+        if self.use_tb:
+            metrics['value_loss'] = value_loss.item()
+
+        self.vnet_opt.zero_grad(set_to_none=True)
+        value_loss.backward()
+        self.vnet_opt.step()
+
+        return metrics
+
+    def compute_target_Q(self, next_obs, reward, discount, step):
+        stddev = self.compute_stddev(step)
+        dist = self.actor(next_obs, stddev)
+        next_action = dist.sample(clip=self.stddev_clip)
+
+        target_Q1, target_Q2 = self.critic_target(next_obs, next_action)
+        target_V_explore = torch.min(target_Q1, target_Q2)
+
+        with torch.no_grad():
+            target_V_exploit = self.vnet(next_obs)
+
+        # Mix exploitation and exploration value
+        target_V = self.lambda_mix * target_V_exploit + (1 - self.lambda_mix) * target_V_explore
+        target_Q = reward + (discount * target_V)
+
+        return target_Q
 
     def update_critic(self, obs, action, reward, discount, next_obs, step):
         metrics = dict()
 
         with torch.no_grad():
-            stddev = utils.schedule(self.stddev_schedule, step)
-            dist = self.actor(next_obs, stddev)
-            next_action = dist.sample(clip=self.stddev_clip)
-            target_Q1, target_Q2 = self.critic_target(next_obs, next_action)
-            target_V = torch.min(target_Q1, target_Q2)
-            target_Q = reward + (discount * target_V)
+            # stddev = utils.schedule(self.stddev_schedule, step)
+            
+            # stddev = self.compute_stddev(step)  # trick 2
+            # dist = self.actor(next_obs, stddev)
+            # next_action = dist.sample(clip=self.stddev_clip)
+            # target_Q1, target_Q2 = self.critic_target(next_obs, next_action)
+            # target_V = torch.min(target_Q1, target_Q2)
+            # target_Q = reward + (discount * target_V)
+            target_Q = self.compute_target_Q(next_obs, reward, discount, step)
+
 
         Q1, Q2 = self.critic(obs, action)
         critic_loss = F.mse_loss(Q1, target_Q) + F.mse_loss(Q2, target_Q)
@@ -208,7 +290,8 @@ class DrMAgent:
     def update_actor(self, obs, step):
         metrics = dict()
 
-        stddev = utils.schedule(self.stddev_schedule, step)
+        # stddev = utils.schedule(self.stddev_schedule, step)
+        stddev = self.compute_stddev(step)  # trick 2
         dist = self.actor(obs, stddev)
         action = dist.sample(clip=self.stddev_clip)
         log_prob = dist.log_prob(action).sum(-1, keepdim=True)
@@ -256,19 +339,27 @@ class DrMAgent:
 
         # update actor
         metrics.update(self.update_actor(obs.detach(), step))
+        
+        # update value network
+        metrics.update(self.update_value_network(obs.detach(), action.detach()))
 
         # update critic target
         utils.soft_update_params(self.critic, self.critic_target,
                                  self.critic_target_tau)
         
+        self.actor_ratio = utils.calculate_dormant_ratio(self.actor, (obs.detach(), step), tau=0.025)
+        
         if self.use_tb:
             with torch.no_grad():
-                actor_ratio = utils.calculate_dormant_ratio(self.actor, (obs.detach(), step), tau=0.025)
+                actor_ratio = self.actor_ratio
                 metrics['actor_dormant_ratio'] = actor_ratio
                 
+                self.update_awaken_step(step, actor_ratio)
+
                 # Calculate dormant ratio for critic
                 # Need to sample actions for critic input
-                stddev = utils.schedule(self.stddev_schedule, step)
+                # stddev = utils.schedule(self.stddev_schedule, step)
+                stddev = self.compute_stddev(step)
                 dist = self.actor(obs, stddev)
                 sampled_action = dist.sample(clip=self.stddev_clip)
                 critic_ratio = utils.calculate_dormant_ratio(self.critic, (obs.detach(), sampled_action.detach()), tau=0.025)
