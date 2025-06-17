@@ -1,13 +1,10 @@
 defaults:
   - _self_
   - task@_global_: hopper_hop
-  # - task@_global_: quadruped_walk
-  # - task@_global_: assembly
+  - agent@_global_: drm
   - override hydra/launcher: submitit_local
 
 # task settings
-sim_env: dmc
-# sim_env: metaworld
 frame_stack: 3
 action_repeat: 2
 discount: 0.99
@@ -37,36 +34,7 @@ experiment: exp
 lr: 1e-4
 feature_dim: 50
 
-agent:
-  _target_: agents.drm.DrQV2Agent
-  # _target_: agents.drqv2.DrQV2Agent
-  # drm settings
-  dr_tau : 0.025
-  use_perturbation: true
-  perturbation_interval: 5000
-  perturbation_rate: 2
-  max_perturbation: 0.9
-  min_perturbation: 0.2
-  use_drg_exploration: true
-  beta_threshold: 0.2
-  exploration_temperature: 0.1
-  use_drg_exploitation: true
-  exploitation_temperature: 0.02
-  exploitation_expectile: 0.9
-  max_exploitation_lambda: 0.6
-  # basic settings
-  obs_shape: ??? # to be specified later
-  action_shape: ??? # to be specified later
-  device: ${device}
-  lr: ${lr}
-  critic_target_tau: 0.01
-  update_every_steps: 2
-  use_tb: ${use_tb}
-  num_expl_steps: 2000
-  hidden_dim: 1024
-  feature_dim: ${feature_dim}
-  stddev_schedule: ${stddev_schedule}
-  stddev_clip: 0.3
+
 
 hydra:
   run:

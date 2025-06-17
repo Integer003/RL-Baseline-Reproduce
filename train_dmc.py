@@ -17,8 +17,6 @@ import torch
 from dm_env import specs
 
 import envs.dmc as dmc
-# import envs.adroit as adroit
-import envs.mw as mw
 import utils.utils as utils
 from utils.logger import Logger
 from utils.replay_buffer import ReplayBufferStorage, make_replay_loader
@@ -47,26 +45,8 @@ class Workspace:
         self._global_episode = 0
 
     def setup(self):
-        # create envs
-        if self.cfg.sim_env == 'dmc':
-            self.train_env = dmc.make(self.cfg.task_name, self.cfg.frame_stack,
-                                    self.cfg.action_repeat, self.cfg.seed)
-            self.eval_env = dmc.make(self.cfg.task_name, self.cfg.frame_stack,
-                                    self.cfg.action_repeat, self.cfg.seed)
-        # elif self.cfg.sim_env == 'adroit':
-        #     self.train_env = adroit.make(self.cfg.task_name, self.cfg.frame_stack,
-        #                                  self.cfg.action_repeat, self.cfg.seed)
-        #     self.eval_env = adroit.make(self.cfg.task_name, self.cfg.frame_stack,
-        #                                 self.cfg.action_repeat, self.cfg.seed)
-        elif self.cfg.sim_env == 'metaworld':
-            self.train_env = mw.make(self.cfg.task_name, self.cfg.seed,
-                                            self.cfg.action_repeat,
-                                            self.cfg.seed)
-            self.eval_env = mw.make(self.cfg.task_name, self.cfg.seed,
-                                           self.cfg.action_repeat,
-                                           self.cfg.seed)
-        else:
-            raise ValueError(f'Unknown sim_env: {self.cfg.sim_env}')
+        self.train_env = dmc.make(self.cfg.task_name, self.cfg.frame_stack, self.cfg.action_repeat, self.cfg.seed)
+        self.eval_env = dmc.make(self.cfg.task_name, self.cfg.frame_stack, self.cfg.action_repeat, self.cfg.seed)
         
         # create logger
         self.cfg.agent.obs_shape = self.train_env.observation_spec().shape
@@ -82,7 +62,7 @@ class Workspace:
         self.replay_storage = ReplayBufferStorage(data_specs,
                                                   self.work_dir / 'buffer')
 
-        self.replay_loader = make_replay_loader(
+        self.replay_loader, self.buffer = make_replay_loader(
             self.work_dir / 'buffer', self.cfg.replay_buffer_size,
             self.cfg.batch_size, self.cfg.replay_buffer_num_workers,
             self.cfg.save_snapshot, self.cfg.nstep, self.cfg.discount)
@@ -195,7 +175,7 @@ class Workspace:
 
             # try to update the agent
             if not seed_until_step(self.global_step):
-                metrics = self.agent.update(self.replay_iter, self.global_step)
+                metrics = self.agent.update(self.replay_iter, self.global_step) if self.global_step % self.cfg.agent.update_every_steps == 0 else dict()
                 self.logger.log_metrics(metrics, self.global_frame, ty='train')
 
             # take env step
@@ -223,7 +203,7 @@ class Workspace:
 
 @hydra.main(config_path='cfgs', config_name='config')
 def main(cfg):
-    from train import Workspace as W
+    from train_dmc import Workspace as W
     root_dir = Path.cwd()
     workspace = W(cfg)
     snapshot = root_dir / 'snapshot.pt'

@@ -17,9 +17,6 @@ from dm_env import specs
 
 import envs.mw as mw
 
-import envs.dmc as dmc
-# import envs.adroit as adroit
-import envs.mw as mw
 import utils.utils as utils
 from utils.logger import Logger
 from utils.replay_buffer import ReplayBufferStorage, make_replay_loader
@@ -30,9 +27,7 @@ import re
 torch.backends.cudnn.benchmark = True
 
 
-def make_agent(obs_spec, action_spec, cfg):
-    cfg.obs_shape = obs_spec.shape
-    cfg.action_shape = action_spec.shape
+def make_agent(cfg):
     return hydra.utils.instantiate(cfg)
 
 
@@ -44,6 +39,15 @@ class Workspace:
         self.cfg = cfg
         utils.set_seed_everywhere(cfg.seed)
         self.device = torch.device(cfg.device)
+
+        self._discount = cfg.discount
+        self._discount_alpha = cfg.discount_alpha
+        self._discount_alpha_temp = cfg.discount_alpha_temp
+        self._discount_beta = cfg.discount_beta
+        self._discount_beta_temp = cfg.discount_beta_temp
+        self._nstep = cfg.nstep
+        self._nstep_alpha = cfg.nstep_alpha
+        self._nstep_alpha_temp = cfg.nstep_alpha_temp
         self.setup()
 
         self.agent = make_agent(self.cfg.agent)
@@ -53,25 +57,8 @@ class Workspace:
 
     def setup(self):
         # create envs
-        if self.cfg.sim_env == 'dmc':
-            self.train_env = dmc.make(self.cfg.task_name, self.cfg.frame_stack,
-                                    self.cfg.action_repeat, self.cfg.seed)
-            self.eval_env = dmc.make(self.cfg.task_name, self.cfg.frame_stack,
-                                    self.cfg.action_repeat, self.cfg.seed)
-        # elif self.cfg.sim_env == 'adroit':
-        #     self.train_env = adroit.make(self.cfg.task_name, self.cfg.frame_stack,
-        #                                  self.cfg.action_repeat, self.cfg.seed)
-        #     self.eval_env = adroit.make(self.cfg.task_name, self.cfg.frame_stack,
-        #                                 self.cfg.action_repeat, self.cfg.seed)
-        elif self.cfg.sim_env == 'metaworld':
-            self.train_env = mw.make(self.cfg.task_name, self.cfg.seed,
-                                            self.cfg.action_repeat,
-                                            self.cfg.seed)
-            self.eval_env = mw.make(self.cfg.task_name, self.cfg.seed,
-                                           self.cfg.action_repeat,
-                                           self.cfg.seed)
-        else:
-            raise ValueError(f'Unknown sim_env: {self.cfg.sim_env}')
+        self.train_env = mw.make(self.cfg.task_name, self.cfg.seed, self.cfg.action_repeat, self.cfg.seed)
+        self.eval_env = mw.make(self.cfg.task_name, self.cfg.seed, self.cfg.action_repeat, self.cfg.seed)
         
         # create logger
         self.cfg.agent.obs_shape = self.train_env.observation_spec().shape
@@ -230,9 +217,12 @@ class Workspace:
                                         eval_mode=False)
 
             # try to update the agent
-            if not seed_until_step(self.global_step) and self.global_step % self.cfg.update_every_steps == 0:   
-                metrics = self.agent.update(
-                    self.replay_iter, self.global_step)
+            # if not seed_until_step(self.global_step) and self.global_step % self.cfg.update_every_steps == 0:   
+            #     metrics = self.agent.update(
+            #         self.replay_iter, self.global_step)
+            #     self.logger.log_metrics(metrics, self.global_frame, ty='train')
+            if not seed_until_step(self.global_step):
+                metrics = self.agent.update(self.replay_iter, self.global_step) if self.global_step % self.cfg.agent.update_every_steps == 0 else dict()
                 self.logger.log_metrics(metrics, self.global_frame, ty='train')
 
             # take env step
