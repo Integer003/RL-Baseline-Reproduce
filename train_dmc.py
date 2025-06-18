@@ -70,6 +70,12 @@ class Workspace:
             self.work_dir / 'buffer', self.cfg.replay_buffer_size,
             self.cfg.batch_size, self.cfg.replay_buffer_num_workers,
             self.cfg.save_snapshot, self.cfg.nstep, self.cfg.multistep, self.cfg.discount)
+        elif hasattr(self.cfg.agent, 'sample_alpha'):
+            self.replay_loader = make_replay_loader(
+            self.work_dir / 'buffer', self.cfg.replay_buffer_size,
+            self.cfg.batch_size, self.cfg.replay_buffer_num_workers,
+            self.cfg.save_snapshot, self.cfg.nstep, self.cfg.discount,
+            task_name=self.cfg.task_name, sample_alpha=self.cfg.sample_alpha)
         else:
             self.replay_loader, self.buffer = make_replay_loader(
                 self.work_dir / 'buffer', self.cfg.replay_buffer_size,
