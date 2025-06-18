@@ -1,7 +1,7 @@
 defaults:
   - _self_
   - task@_global_: dog_stand
-  - agent@_global_: taco
+  - agent@_global_: cp3er
   - override hydra/launcher: submitit_local
 
 # task settings
