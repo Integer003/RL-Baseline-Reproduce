@@ -1,3 +1,13 @@
+Forked from:
+```
+https://github.com/facebookresearch/drqv2
+https://github.com/XuGW-Kevin/DrM
+https://github.com/suninghuang19/mentor
+https://github.com/Aladoro/Stabilizing-Off-Policy-RL
+```
+
+Installation
+
 ```bash
 sudo apt update
 sudo apt install libosmesa6-dev libegl1-mesa libgl1-mesa-glx libglfw3 
@@ -28,7 +38,7 @@ export LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu
 Run DMC task:
 
 ```bash
-python train_dmc.py task=dog_walk agent=drm
+python train_dmc.py task=dog_stand agent=drm
 ```
 
 Run metaworld task:

@@ -20,7 +20,10 @@ import envs.dmc as dmc
 import utils.utils as utils
 from utils.logger import Logger
 from utils.replay_buffer import ReplayBufferStorage, make_replay_loader
+from utils.replay_buffer_taco import make_replay_loader as make_replay_loader_taco
+from utils.replay_buffer_taco import ReplayBufferStorage as ReplayBufferStorageTaco
 from utils.video import TrainVideoRecorder, VideoRecorder
+from copy import deepcopy
 
 torch.backends.cudnn.benchmark = True
 
@@ -59,13 +62,19 @@ class Workspace:
                       specs.Array((1,), np.float32, 'reward'),
                       specs.Array((1,), np.float32, 'discount'))
 
-        self.replay_storage = ReplayBufferStorage(data_specs,
-                                                  self.work_dir / 'buffer')
+        self.replay_storage = ReplayBufferStorage(data_specs, self.work_dir / 'buffer')
 
-        self.replay_loader, self.buffer = make_replay_loader(
+        # if self.cfg.agent._target_ == 'agents.taco.TACOAgent':
+        if hasattr(self.cfg.agent, 'multistep'):
+            self.replay_loader = make_replay_loader_taco(
             self.work_dir / 'buffer', self.cfg.replay_buffer_size,
             self.cfg.batch_size, self.cfg.replay_buffer_num_workers,
-            self.cfg.save_snapshot, self.cfg.nstep, self.cfg.discount)
+            self.cfg.save_snapshot, self.cfg.nstep, self.cfg.multistep, self.cfg.discount)
+        else:
+            self.replay_loader, self.buffer = make_replay_loader(
+                self.work_dir / 'buffer', self.cfg.replay_buffer_size,
+                self.cfg.batch_size, self.cfg.replay_buffer_num_workers,
+                self.cfg.save_snapshot, self.cfg.nstep, self.cfg.discount)
         self._replay_iter = None
 
         self.video_recorder = VideoRecorder(
@@ -150,6 +159,15 @@ class Workspace:
                         log('episode', self.global_episode)
                         log('buffer_size', len(self.replay_storage))
                         log('step', self.global_step)
+                # update priority queue
+                if hasattr(self.agent, 'tp_set'):
+                    self.agent.tp_set.add(episode_reward,\
+                                            deepcopy(self.agent.actor),\
+                                            deepcopy(self.agent.critic),\
+                                            deepcopy(self.agent.critic_target),\
+                                            deepcopy(self.agent.value_predictor),\
+                                            moe=deepcopy(self.agent.actor.moe.experts),\
+                                            gate=deepcopy(self.agent.actor.moe.gate))
 
                 # reset env
                 time_step = self.train_env.reset()
@@ -175,7 +193,7 @@ class Workspace:
 
             # try to update the agent
             if not seed_until_step(self.global_step):
-                metrics = self.agent.update(self.replay_iter, self.global_step) if self.global_step % self.cfg.agent.update_every_steps == 0 else dict()
+                metrics = self.agent.update(self.replay_iter, self.global_step) if self.global_step % self.cfg.update_every_steps == 0 else dict()
                 self.logger.log_metrics(metrics, self.global_frame, ty='train')
 
             # take env step

@@ -1,5 +1,5 @@
 agent:
-  _target_: agents.drm.DrMAgent
+  _target_: agents.mentor.MENTORAgent
   obs_shape: ??? # to be specified later
   action_shape: ??? # to be specified later
   device: ${device}
@@ -10,7 +10,7 @@ agent:
   dormant_temp: 10
   target_lambda: 0.6 # to be specified later
   lambda_temp: 50
-  dormant_perturb_interval: 20000
+  perturb_interval: 10000
   min_perturb_factor: 0.2
   max_perturb_factor: 0.6 # to be specified later
   perturb_rate: 2
@@ -22,3 +22,19 @@ agent:
   stddev_schedule: ${stddev_schedule}
   stddev_clip: 0.3
   expectile: 0.9
+  lr_actor_ratio: 1
+  aux_loss_scale_warmup: -1
+  aux_loss_scale_warmsteps: -1
+  aux_loss_scale: 0.002
+  aux_loss_type: ""
+  encoder_type: scratch #spawnnet
+  resnet_fix: True
+  oneXone_reg_scale: 0.
+  oneXone_reg_ratio: 0.5
+  pretrained_factor: 1.
+  tp_set_size: 10
+  moe_gate_dim: 256
+  moe_hidden_dim: 256
+  num_experts: 16
+  top_k: 4
+  dropout: 0.1
