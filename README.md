@@ -4,6 +4,9 @@ https://github.com/facebookresearch/drqv2
 https://github.com/XuGW-Kevin/DrM
 https://github.com/suninghuang19/mentor
 https://github.com/Aladoro/Stabilizing-Off-Policy-RL
+https://github.com/FrankZheng2022/TACO
+https://github.com/jzndd/CP3ER
+https://github.com/lilucse/Normalization-Enhances-Generalization-in-Visual-Reinforcement-Learning
 ```
 
 Installation
