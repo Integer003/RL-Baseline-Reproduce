@@ -400,10 +400,10 @@ class models_tuple(object):
                 param.weight.data = sampled_params[2 * i]
                 param.bias.data = sampled_params[2 * i + 1]
                 i += 1
-            if (moe_expert or moe_gate) and isinstance(param, nn.Linear) and "." in name:
+            elif (moe_expert or moe_gate) and isinstance(param, nn.Linear) and "." in name:
                 param.weight.data = sampled_params[2 * i]
                 param.bias.data = sampled_params[2 * i + 1]
                 i += 1
-            if not (moe_expert or moe_gate) and isinstance(param, nn.Linear):
+            elif not (moe_expert or moe_gate) and isinstance(param, nn.Linear):
                 param.weight.data = sampled_params[i]
                 i += 1
