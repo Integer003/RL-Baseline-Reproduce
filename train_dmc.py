@@ -22,6 +22,8 @@ from utils.logger import Logger
 from utils.replay_buffer import ReplayBufferStorage, make_replay_loader
 from utils.replay_buffer_taco import make_replay_loader as make_replay_loader_taco
 from utils.replay_buffer_taco import ReplayBufferStorage as ReplayBufferStorageTaco
+from utils.replay_buffer_cp3er import make_replay_loader as make_replay_loader_cp3er
+from utils.replay_buffer_cp3er import ReplayBufferStorage as ReplayBufferStorageCp3er
 from utils.video import TrainVideoRecorder, VideoRecorder
 from copy import deepcopy
 
@@ -62,7 +64,7 @@ class Workspace:
                       specs.Array((1,), np.float32, 'reward'),
                       specs.Array((1,), np.float32, 'discount'))
 
-        self.replay_storage = ReplayBufferStorage(data_specs, self.work_dir / 'buffer')
+        
 
         # if self.cfg.agent._target_ == 'agents.taco.TACOAgent':
         if hasattr(self.cfg.agent, 'multistep'):
@@ -70,17 +72,17 @@ class Workspace:
             self.work_dir / 'buffer', self.cfg.replay_buffer_size,
             self.cfg.batch_size, self.cfg.replay_buffer_num_workers,
             self.cfg.save_snapshot, self.cfg.nstep, self.cfg.multistep, self.cfg.discount)
+            self.replay_storage = ReplayBufferStorageTaco(data_specs, self.work_dir / 'buffer')
         elif hasattr(self.cfg.agent, 'sample_alpha'):
-            self.replay_loader = make_replay_loader(
+            self.replay_loader = make_replay_loader_cp3er(
             self.work_dir / 'buffer', self.cfg.replay_buffer_size,
             self.cfg.batch_size, self.cfg.replay_buffer_num_workers,
             self.cfg.save_snapshot, self.cfg.nstep, self.cfg.discount,
             task_name=self.cfg.task_name, sample_alpha=self.cfg.sample_alpha)
+            self.replay_storage = ReplayBufferStorageCp3er(data_specs, self.work_dir / 'buffer')
         else:
-            self.replay_loader, self.buffer = make_replay_loader(
-                self.work_dir / 'buffer', self.cfg.replay_buffer_size,
-                self.cfg.batch_size, self.cfg.replay_buffer_num_workers,
-                self.cfg.save_snapshot, self.cfg.nstep, self.cfg.discount)
+            self.replay_loader, self.buffer = make_replay_loader(self.work_dir / 'buffer', self.cfg.replay_buffer_size, self.cfg.batch_size, self.cfg.replay_buffer_num_workers, self.cfg.save_snapshot, self.cfg.nstep, self.cfg.discount)
+            self.replay_storage = ReplayBufferStorage(data_specs, self.work_dir / 'buffer')
         self._replay_iter = None
 
         self.video_recorder = VideoRecorder(

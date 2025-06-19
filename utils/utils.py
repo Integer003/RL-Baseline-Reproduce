@@ -396,11 +396,11 @@ class models_tuple(object):
         for name, param in model.named_modules():
             if not (moe_expert or moe_gate) and "moe" in name: ### lsh
                 continue
-            if not (moe_expert or moe_gate) and "moe" not in name and (isinstance(param, nn.Linear) or isinstance(param, nn.Conv2d)):
+            if not (moe_expert or moe_gate) and "moe" not in name and (isinstance(param, nn.Linear) or isinstance(param, nn.Conv2d)) and "." in name:
                 param.weight.data = sampled_params[2 * i]
                 param.bias.data = sampled_params[2 * i + 1]
                 i += 1
-            if (moe_expert or moe_gate) and isinstance(param, nn.Linear):
+            if (moe_expert or moe_gate) and isinstance(param, nn.Linear) and "." in name:
                 param.weight.data = sampled_params[2 * i]
                 param.bias.data = sampled_params[2 * i + 1]
                 i += 1
