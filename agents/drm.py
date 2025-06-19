@@ -129,7 +129,7 @@ class DrMAgent:
                  update_every_steps, stddev_schedule, stddev_clip, use_tb, 
                  perturb_frames, 
                  dormant_ratio_threshold, temp,
-                 expectile, lambda_mix):
+                 expectile, lambda_temp, target_lambda):
         self.device = device
         self.critic_target_tau = critic_target_tau
         self.update_every_steps = update_every_steps
@@ -143,7 +143,8 @@ class DrMAgent:
         self.temp = temp
         self.actor_ratio = 0.5  # init. Not that important.
         self.expectile = expectile
-        self.lambda_mix = lambda_mix
+        self.lambda_temp = lambda_temp
+        self.target_lambda = target_lambda
 
         # models
         self.encoder = Encoder(obs_shape).to(device)
@@ -236,6 +237,11 @@ class DrMAgent:
         self.vnet_opt.step()
 
         return metrics
+    
+    @property
+    def lambda_(self):
+        return self.target_lambda / (
+            1 + math.exp(self.lambda_temp * (self.actor_ratio - self.dormant_ratio_threshold)))
 
     def compute_target_Q(self, next_obs, reward, discount, step):
         stddev = self.compute_stddev(step)
@@ -249,7 +255,7 @@ class DrMAgent:
             target_V_exploit = self.vnet(next_obs)
 
         # Mix exploitation and exploration value
-        target_V = self.lambda_mix * target_V_exploit + (1 - self.lambda_mix) * target_V_explore
+        target_V = self.lambda_ * target_V_exploit + (1 - self.lambda_) * target_V_explore
         target_Q = reward + (discount * target_V)
 
         return target_Q
