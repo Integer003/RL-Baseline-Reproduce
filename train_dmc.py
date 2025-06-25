@@ -173,7 +173,7 @@ class Workspace:
                                             deepcopy(self.agent.actor),\
                                             deepcopy(self.agent.critic),\
                                             deepcopy(self.agent.critic_target),\
-                                            deepcopy(self.agent.value_predictor),\
+                                            deepcopy(self.agent.value_buffer),\
                                             moe=deepcopy(self.agent.actor.moe.experts),\
                                             gate=deepcopy(self.agent.actor.moe.gate))
 

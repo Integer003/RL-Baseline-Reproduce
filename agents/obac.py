@@ -39,10 +39,7 @@ class RandomShiftsAug(nn.Module):
         shift *= 2.0 / (h + 2 * self.pad)
 
         grid = base_grid + shift
-        return F.grid_sample(x,
-                             grid,
-                             padding_mode='zeros',
-                             align_corners=False)
+        return F.grid_sample(x, grid, padding_mode='zeros', align_corners=False)
 
 
 class Encoder(nn.Module):
@@ -234,7 +231,7 @@ class VNetwork(nn.Module):
         return v
 
 
-class MENTORAgent:
+class OBACAgent:
     def __init__(self, obs_shape, action_shape, device, lr, feature_dim,
                  hidden_dim, critic_target_tau, dormant_threshold,
                  target_dormant_ratio, dormant_temp, target_lambda,
@@ -244,7 +241,7 @@ class MENTORAgent:
                  lr_actor_ratio, aux_loss_scale_warmup, aux_loss_scale_warmsteps,
                  aux_loss_scale, aux_loss_type, encoder_type, resnet_fix,
                  oneXone_reg_scale, oneXone_reg_ratio, pretrained_factor, tp_set_size,
-                 moe_gate_dim, moe_hidden_dim, num_experts, top_k, dropout):
+                 moe_gate_dim, moe_hidden_dim, num_experts, top_k, dropout, bc_weight):
         self.device = device
         self.critic_target_tau = critic_target_tau
         self.use_tb = use_tb
@@ -273,19 +270,20 @@ class MENTORAgent:
         self.oneXone_reg_scale = oneXone_reg_scale
         self.oneXone_reg_ratio = oneXone_reg_ratio
         self.pretrained_factor = pretrained_factor
-        self.pretrained_factor = pretrained_factor
         self.tp_set_size = tp_set_size
         self.moe_gate_dim = moe_gate_dim
         self.moe_hidden_dim = moe_hidden_dim
         self.num_experts = num_experts
         self.top_k = top_k
         self.dropout = dropout
+        self.bc_weight = bc_weight
 
         # models
         self.encoder = Encoder(obs_shape, encoder_type, resnet_fix, pretrained_factor).to(device)
         self.actor = Actor(self.encoder.repr_dim, action_shape, feature_dim, hidden_dim, 
                            moe_gate_dim, moe_hidden_dim, num_experts, top_k, dropout).to(device)
         self.value_buffer = VNetwork(self.encoder.repr_dim, feature_dim, hidden_dim).to(device)
+        self.critic_buffer = Critic(self.encoder.repr_dim, action_shape, feature_dim, hidden_dim).to(device)
         self.critic = Critic(self.encoder.repr_dim, action_shape, feature_dim, hidden_dim).to(device)
         self.critic_target = Critic(self.encoder.repr_dim, action_shape, feature_dim, hidden_dim).to(device)
         self.critic_target.load_state_dict(self.critic.state_dict())
@@ -294,10 +292,13 @@ class MENTORAgent:
         self.encoder_opt = torch.optim.Adam(self.encoder.parameters(), lr=lr * (1. if encoder_type == 'scratch' else 0.5))
         self.actor_opt = torch.optim.Adam(self.actor.parameters(), lr=lr * self.lr_actor_ratio)
         self.critic_opt = torch.optim.Adam(self.critic.parameters(), lr=lr)
-        self.predictor_opt = torch.optim.Adam(self.value_buffer.parameters(), lr=lr)
+        self.value_buffer_opt = torch.optim.Adam(self.value_buffer.parameters(), lr=lr)
+        self.critic_buffer_opt = torch.optim.Adam(self.critic_buffer.parameters(), lr=lr)
 
         # data augmentation
         self.aug = RandomShiftsAug(pad=4)
+
+        # training settings
         self.n_updates = 0
         self.perturb_time = 0
         self.train()
@@ -335,6 +336,7 @@ class MENTORAgent:
         self.critic.train(training)
         self.value_buffer.train(training)
         self.critic_target.train()
+        self.critic_buffer.train(training)
 
     def act(self, obs, step, eval_mode):
         obs = torch.as_tensor(obs, device=self.device)
@@ -348,7 +350,7 @@ class MENTORAgent:
                 action.uniform_(-1.0, 1.0)
         return action.cpu().numpy()[0]
 
-    def update_predictor(self, obs, action):
+    def update_value_buffer(self, obs, action):
         metrics = dict()
 
         Q1, Q2 = self.critic(obs, action)
@@ -362,59 +364,86 @@ class MENTORAgent:
         if self.use_tb:
             metrics['predictor_loss'] = predictor_loss.item()
 
-        self.predictor_opt.zero_grad(set_to_none=True)
+        self.value_buffer_opt.zero_grad(set_to_none=True)
         predictor_loss.backward()
-        self.predictor_opt.step()
+        self.value_buffer_opt.step()
 
         return metrics
+    
+        
 
     def update_critic(self, obs, action, reward, discount, next_obs, step):
+        ### Update critic and critic_buffer and encoder
         metrics = dict()
 
         with torch.no_grad():
             dist, _ = self.actor(next_obs, self.stddev(step))
             next_action = dist.sample(clip=self.stddev_clip)
             target_Q1, target_Q2 = self.critic_target(next_obs, next_action)
-            target_V_explore = torch.min(target_Q1, target_Q2)
-            target_V_exploit = self.value_buffer(next_obs)
-            target_V = self.lambda_ * target_V_exploit + (1 - self.lambda_) * target_V_explore
+            target_V = torch.min(target_Q1, target_Q2)
             target_Q = reward + (discount * target_V)
+            target_V_buffer = self.value_buffer(next_obs)
+            target_Q_buffer = reward + (discount * target_V_buffer)
 
         Q1, Q2 = self.critic(obs, action)
         critic_loss = F.mse_loss(Q1, target_Q) + F.mse_loss(Q2, target_Q)
+
+        Q1_buffer, Q2_buffer = self.critic_buffer(obs, action)
+        critic_loss_buffer = F.mse_loss(Q1_buffer, target_Q_buffer) + F.mse_loss(Q2_buffer, target_Q_buffer)
 
         if self.use_tb:
             metrics['critic_target_q'] = target_Q.mean().item()
             metrics['critic_q1'] = Q1.mean().item()
             metrics['critic_q2'] = Q2.mean().item()
             metrics['critic_loss'] = critic_loss.item()
+            metrics['critic_target_q_buffer'] = target_Q_buffer.mean().item()
+            metrics['critic_q1_buffer'] = Q1_buffer.mean().item()
+            metrics['critic_q2_buffer'] = Q2_buffer.mean().item()
+            metrics['critic_loss_buffer'] = critic_loss_buffer.item()
 
-        # optimize encoder and critic
-        self.encoder_opt.zero_grad(set_to_none=True)
-        self.critic_opt.zero_grad(set_to_none=True)
-        
         if self.oneXone_reg_scale > 0.01:
-            def customized_regularization(weight):
-                regularization = torch.norm(weight, p=2)
+            def customized_regularization(weight, p):
+                regularization = torch.norm(weight, p=p)
                 return regularization
+            
             critic_loss += self.oneXone_reg_scale * customized_regularization(self.encoder.oneXone_conv_layer1.weight, self.oneXone_reg_ratio)
             critic_loss += self.oneXone_reg_scale * customized_regularization(self.encoder.oneXone_conv_layer2.weight, self.oneXone_reg_ratio)
             
-        critic_loss.backward()
+            critic_loss_buffer += self.oneXone_reg_scale * customized_regularization(self.encoder.oneXone_conv_layer1.weight, self.oneXone_reg_ratio)
+            critic_loss_buffer += self.oneXone_reg_scale * customized_regularization(self.encoder.oneXone_conv_layer2.weight, self.oneXone_reg_ratio)
+    
+        self.encoder_opt.zero_grad(set_to_none=True)
+
+        self.critic_opt.zero_grad(set_to_none=True)
+        critic_loss.backward(retain_graph=True)  # retain_graph since encoder is shared
         self.critic_opt.step()
+        
+        self.critic_buffer_opt.zero_grad(set_to_none=True)
+        critic_loss_buffer.backward(retain_graph=True)  # retain graph for encoder
+        self.critic_buffer_opt.step()
+        
         self.encoder_opt.step()
 
         return metrics
 
-    def update_actor(self, obs, step):
+    def update_actor(self, obs, action, reward, discount, next_obs, step):
+        # actor loss from Q
         metrics = dict()
         dist, aux_loss = self.actor(obs, self.stddev(step), metrics)
-        action = dist.sample(clip=self.stddev_clip)
-        log_prob = dist.log_prob(action).sum(-1, keepdim=True)
-        Q1, Q2 = self.critic(obs, action)
-        Q = torch.min(Q1, Q2)
+        pi_action = dist.sample(clip=self.stddev_clip)
+        log_prob = dist.log_prob(pi_action).sum(-1, keepdim=True)
+        Q1, Q2 = self.critic(obs, pi_action)
+        Q = torch.min(Q1, Q2).mean()
 
-        actor_loss = -Q.mean()
+        actor_loss = -Q
+
+        # OBAC terms
+        log_prob_buffer = dist.log_prob(action).sum(-1, keepdim=True)
+        Q1_buffer, Q2_buffer = self.critic_buffer(obs, action)
+        Q_buffer = torch.min(Q1_buffer, Q2_buffer).mean()
+
+        if Q_buffer > Q:
+            actor_loss += -self.bc_weight * log_prob_buffer.mean()
 
         # optimize actor
         self.actor_opt.zero_grad(set_to_none=True)
@@ -438,7 +467,7 @@ class MENTORAgent:
         utils.perturb(self.actor.moe.gate, self.actor_opt, self.perturb_factor(), tp_set=self.tp_set, name="actor_moe_gate")
         utils.perturb(self.critic, self.critic_opt, self.perturb_factor(), tp_set=self.tp_set, name="critic")
         utils.perturb(self.critic_target, self.critic_opt, self.perturb_factor(), tp_set=self.tp_set, name="critic_target")
-        utils.perturb(self.value_buffer, self.predictor_opt, self.perturb_factor(), tp_set=self.tp_set, name="value_buffer")
+        utils.perturb(self.value_buffer, self.value_buffer_opt, self.perturb_factor(), tp_set=self.tp_set, name="value_buffer")
 
     def update(self, replay_iter, step):
         metrics = dict()
@@ -478,13 +507,13 @@ class MENTORAgent:
             metrics['aux_loss_scale'] = self.aux_loss_scale
         
         # update predictor
-        metrics.update(self.update_predictor(obs.detach(), action))
+        metrics.update(self.update_value_buffer(obs.detach(), action))
 
         # update critic
         metrics.update(self.update_critic(obs, action, reward, discount, next_obs, step))
 
         # update actor
-        metrics.update(self.update_actor(obs.detach(), step))
+        metrics.update(self.update_actor(obs.detach(), action, reward, discount, next_obs, step))
 
         # update critic target
         utils.soft_update_params(self.critic, self.critic_target, self.critic_target_tau)

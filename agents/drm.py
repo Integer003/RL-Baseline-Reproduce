@@ -170,7 +170,7 @@ class DrMAgent:
         self.encoder = Encoder(obs_shape).to(device)
         self.actor = Actor(self.encoder.repr_dim, action_shape, feature_dim,
                            hidden_dim).to(device)
-        self.value_predictor = VNetwork(self.encoder.repr_dim, feature_dim,
+        self.value_buffer = VNetwork(self.encoder.repr_dim, feature_dim,
                                         hidden_dim).to(device)
         self.critic = Critic(self.encoder.repr_dim, action_shape, feature_dim,
                              hidden_dim).to(device)
@@ -183,7 +183,7 @@ class DrMAgent:
         self.actor_opt = torch.optim.Adam(self.actor.parameters(), lr=lr)
         self.critic_opt = torch.optim.Adam(self.critic.parameters(), lr=lr)
         self.predictor_opt = torch.optim.Adam(
-            self.value_predictor.parameters(), lr=lr)
+            self.value_buffer.parameters(), lr=lr)
 
         # data augmentation
         self.aug = RandomShiftsAug(pad=4)
@@ -225,7 +225,7 @@ class DrMAgent:
         self.encoder.train(training)
         self.actor.train(training)
         self.critic.train(training)
-        self.value_predictor.train(training)
+        self.value_buffer.train(training)
 
     def act(self, obs, step, eval_mode):
         obs = torch.as_tensor(obs, device=self.device)
@@ -244,7 +244,7 @@ class DrMAgent:
 
         Q1, Q2 = self.critic(obs, action)
         Q = torch.min(Q1, Q2)
-        V = self.value_predictor(obs)
+        V = self.value_buffer(obs)
         vf_err = V - Q
         vf_sign = (vf_err > 0).float()
         vf_weight = (1 - vf_sign) * self.expectile + vf_sign * (1 - self.expectile)
@@ -267,7 +267,7 @@ class DrMAgent:
             next_action = dist.sample(clip=self.stddev_clip)
             target_Q1, target_Q2 = self.critic_target(next_obs, next_action)
             target_V_explore = torch.min(target_Q1, target_Q2)
-            target_V_exploit = self.value_predictor(next_obs)
+            target_V_exploit = self.value_buffer(next_obs)
             target_V = self.lambda_ * target_V_exploit + (1 - self.lambda_) * target_V_explore
             target_Q = reward + (discount * target_V)
 
@@ -318,7 +318,7 @@ class DrMAgent:
                       self.perturb_factor(step))
         utils.perturb(self.encoder, self.encoder_opt,
                       self.perturb_factor(step))
-        utils.perturb(self.value_predictor, self.predictor_opt,
+        utils.perturb(self.value_buffer, self.predictor_opt,
                       self.perturb_factor(step))
 
     def update(self, replay_iter, step):

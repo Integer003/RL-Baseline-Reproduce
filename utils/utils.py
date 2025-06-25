@@ -300,8 +300,8 @@ def perturb(net, optimizer, perturb_factor, tp_set=None, name="actor"):
             tp_set.sampled_model(new_net, tp_set.sample_params(tp_set.cal_params_stats(tp_set.critics)))
         elif name == "critic_target":
             tp_set.sampled_model(new_net, tp_set.sample_params(tp_set.cal_params_stats(tp_set.critic_targets)))
-        elif name == "value_predictor":
-            tp_set.sampled_model(new_net, tp_set.sample_params(tp_set.cal_params_stats(tp_set.value_predictors)))
+        elif name == "value_buffer":
+            tp_set.sampled_model(new_net, tp_set.sample_params(tp_set.cal_params_stats(tp_set.value_buffers)))
 
         for n, param in net.named_parameters():     
             if any(key in n for key in linear_keys):
@@ -322,7 +322,7 @@ class models_tuple(object):
         self.actors = []
         self.critics = []
         self.critic_targets = []
-        self.value_predictors = []
+        self.value_buffers = []
         self.moe = moe
         if self.moe:
             self.moes = []
@@ -330,13 +330,13 @@ class models_tuple(object):
         if self.gate:
             self.gates = []
 
-    def add(self, episode_reward, actor, critic, critic_target, value_predictor, moe=None, gate=None):
+    def add(self, episode_reward, actor, critic, critic_target, value_buffer, moe=None, gate=None):
         if self.length < self.maxsize:
             self.episode_reward.append(episode_reward)
             self.actors.append(actor)
             self.critics.append(critic)
             self.critic_targets.append(critic_target)
-            self.value_predictors.append(value_predictor)
+            self.value_buffers.append(value_buffer)
             self.length += 1               
             if self.moe:
                 self.moes.append(moe)
@@ -349,7 +349,7 @@ class models_tuple(object):
                 self.actors[min_idx] = actor
                 self.critics[min_idx] = critic
                 self.critic_targets[min_idx] = critic_target
-                self.value_predictors[min_idx] = value_predictor
+                self.value_buffers[min_idx] = value_buffer
                 if self.moe:
                     self.moes[min_idx] = moe
                 if self.gate:
@@ -360,50 +360,36 @@ class models_tuple(object):
         return metrics
 
     def cal_params_stats(self, models, moe_expert=False, moe_gate=False):
-        # print("Calculating parameters statistics...")
-        weights_and_biases = []
-        for name, param in models[0].named_modules():
-            # print("+Processing module: {}...".format(name))
-            if not (moe_expert or moe_gate) and "moe" in name: ### lsh
+        print("Calculating parameters statistics...")
+        param_stats = {}
+        
+        for name, _ in models[0].named_parameters():
+            # if moe_expert != ("moe.experts" in name) or moe_gate != ("moe.gate" in name):
+            if not(moe_expert or moe_gate) and "moe" in name:
                 continue
-            if not (moe_expert or moe_gate) and "moe" not in name and (isinstance(param, nn.Linear) or isinstance(param, nn.Conv2d)) and "." in name:
-                layer_weights = torch.stack([model._modules[name.split(".")[0]][int(name.split(".")[1])].weight.data for model in models])
-                layer_biases = torch.stack([model._modules[name.split(".")[0]][int(name.split(".")[1])].bias.data for model in models])
-                weights_and_biases.append(layer_weights)
-                weights_and_biases.append(layer_biases)
-            elif (moe_expert or moe_gate) and isinstance(param, nn.Linear) and "." in name:
-                layer_weights = torch.stack([model._modules[name.split(".")[0]][int(name.split(".")[1])].weight.data for model in models])
-                layer_biases = torch.stack([model._modules[name.split(".")[0]][int(name.split(".")[1])].bias.data for model in models])
-                weights_and_biases.append(layer_weights)
-                weights_and_biases.append(layer_biases)
-            elif not (moe_expert or moe_gate) and isinstance(param, nn.Linear):
-                # print("Processing linear module: {} for non moe network...".format(name))
-                # print(f"Layer {name}: weight shape {models[0].weight.shape}")
-                layer_weights = torch.stack([model.weight.data for model in models])
-                weights_and_biases.append(layer_weights)
-        params_stats = [(param.mean(dim=0), torch.clamp(param.std(dim=0), min=1e-7)) for param in weights_and_biases]
-        return params_stats
+            
+            print(f"  - Processing parameter: {name}")
+            stacked_params = torch.stack([model.state_dict()[name] for model in models])
+            mean = stacked_params.mean(dim=0)
+            std = torch.clamp(stacked_params.std(dim=0), min=1e-7)
+            param_stats[name] = (mean, std)
+        
+        return param_stats
 
     def sample_params(self, params_stats):
-        sampled_params = []
-        for mean, std in params_stats:
+        sampled_params = {}
+        for name, (mean, std) in params_stats.items():
             dist = pyd.Normal(mean, std)
-            sampled_params.append(dist.sample())
+            sampled_params[name] = dist.sample()
         return sampled_params
 
     def sampled_model(self, model, sampled_params, moe_expert=False, moe_gate=False):
-        i = 0
-        for name, param in model.named_modules():
-            if not (moe_expert or moe_gate) and "moe" in name: ### lsh
-                continue
-            if not (moe_expert or moe_gate) and "moe" not in name and (isinstance(param, nn.Linear) or isinstance(param, nn.Conv2d)) and "." in name:
-                param.weight.data = sampled_params[2 * i]
-                param.bias.data = sampled_params[2 * i + 1]
-                i += 1
-            elif (moe_expert or moe_gate) and isinstance(param, nn.Linear) and "." in name:
-                param.weight.data = sampled_params[2 * i]
-                param.bias.data = sampled_params[2 * i + 1]
-                i += 1
-            elif not (moe_expert or moe_gate) and isinstance(param, nn.Linear):
-                param.weight.data = sampled_params[i]
-                i += 1
+        state_dict = model.state_dict()
+        
+        for name, param in sampled_params.items():
+            if name in state_dict:
+                state_dict[name].copy_(param)
+        
+        # Load the updated state dictionary back into the model
+        model.load_state_dict(state_dict)
+        return model
