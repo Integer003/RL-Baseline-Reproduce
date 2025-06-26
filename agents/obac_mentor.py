@@ -306,6 +306,10 @@ class OBACAgent:
         # Task-oriented Perturbation
         self.tp_set = utils.models_tuple(maxsize=self.tp_set_size, moe=True, gate=True)
 
+        # For logging
+        self.obac_bc_times = 0
+        self.obac_total_times = 0
+
     @property
     def dormant_stddev(self):
         return 0.8 / (1 + math.exp(-self.dormant_temp * (self.dormant_ratio - self.target_dormant_ratio)))
@@ -444,6 +448,8 @@ class OBACAgent:
 
         if Q_buffer > Q:
             actor_loss += -self.bc_weight * log_prob_buffer.mean()
+            self.obac_bc_times += 1
+        self.obac_total_times += 1
 
         # optimize actor
         self.actor_opt.zero_grad(set_to_none=True)
@@ -458,6 +464,7 @@ class OBACAgent:
             metrics['actor_loss'] = actor_loss.item()
             metrics['actor_logprob'] = log_prob.mean().item()
             metrics['actor_ent'] = dist.entropy().sum(dim=-1).mean().item()
+            metrics['obac_rate'] = self.obac_bc_times / self.obac_total_times if self.obac_total_times > 0 else 0
 
         return metrics
 

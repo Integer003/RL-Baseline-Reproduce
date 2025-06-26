@@ -73,7 +73,7 @@ class Workspace:
             self.cfg.batch_size, self.cfg.replay_buffer_num_workers,
             self.cfg.save_snapshot, self.cfg.nstep, self.cfg.multistep, self.cfg.discount)
             self.replay_storage = ReplayBufferStorageTaco(data_specs, self.work_dir / 'buffer')
-        elif hasattr(self.cfg.agent, 'sample_alpha'):
+        elif "cp3er" in self.cfg.agent._target_:
             self.replay_loader = make_replay_loader_cp3er(
             self.work_dir / 'buffer', self.cfg.replay_buffer_size,
             self.cfg.batch_size, self.cfg.replay_buffer_num_workers,

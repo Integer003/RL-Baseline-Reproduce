@@ -174,6 +174,10 @@ def make_replay_loader(replay_dir, max_size, batch_size, num_workers,
                        save_snapshot, nstep, discount):
     max_size_per_worker = max_size // max(1, num_workers)
 
+
+    print("Creating Normal replay buffer with max_size_per_worker: {}".format(max_size_per_worker))
+    print("nstep: {}, discount: {}".format(nstep, discount))
+
     iterable = ReplayBuffer(replay_dir,
                             max_size_per_worker,
                             num_workers,

@@ -182,6 +182,9 @@ def make_replay_loader(replay_dir, max_size, batch_size, num_workers,
                        save_snapshot, nstep, discount, task_name, sample_alpha=2.0):
     max_size_per_worker = max_size // max(1, num_workers)
 
+    print("Creating cp3er replay buffer with max_size_per_worker: {}".format(max_size_per_worker))
+    print("nstep: {}, discount: {}, task_name: {}, sample_alpha: {}".format(nstep, discount, task_name, sample_alpha))
+
     iterable = ReplayBuffer(replay_dir,
                             max_size_per_worker,
                             num_workers,

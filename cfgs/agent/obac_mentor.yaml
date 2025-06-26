@@ -1,5 +1,5 @@
 agent:
-  _target_: agents.obac.OBACAgent
+  _target_: agents.obac_mentor.OBACAgent
   obs_shape: ??? # to be specified later
   action_shape: ??? # to be specified later
   device: ${device}
@@ -38,4 +38,4 @@ agent:
   num_experts: 16
   top_k: 4
   dropout: 0.1
-  bc_weight: 0.001
+  bc_weight: 0.05

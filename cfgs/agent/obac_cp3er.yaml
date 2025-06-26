@@ -1,5 +1,5 @@
 agent:
-  _target_: agents.cp3er.CP3ERAgent
+  _target_: agents.obac_cp3er.CP3ERAgent
   obs_shape: ??? # to be specified later
   action_shape: ??? # to be specified later
   device: ${device}
@@ -10,5 +10,6 @@ agent:
   num_expl_steps: 10000      # default is 10k
   hidden_dim: 1024
   feature_dim: ${feature_dim}
+  expectile: 0.9
 
 sample_alpha: 2.0
