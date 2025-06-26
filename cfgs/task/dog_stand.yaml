@@ -1,0 +1,10 @@
+defaults:
+  - hard
+  - _self_
+
+task_name: dog_stand
+lr: 8e-5
+feature_dim: 100
+
+# Commemt out the following lines for DrQ-v2
+agent:

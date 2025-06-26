@@ -1,0 +1,6 @@
+Metadata-Version: 2.1
+Name: RRL
+Version: 1.0.0
+Summary: RL algorithm for environments in MuJoCo
+Author: Rutav Shah
+License-File: LICENSE

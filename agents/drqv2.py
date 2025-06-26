@@ -123,11 +123,9 @@ class Critic(nn.Module):
 
 class DrQV2Agent:
     def __init__(self, obs_shape, action_shape, device, lr, feature_dim,
-                 hidden_dim, critic_target_tau, num_expl_steps,
-                 update_every_steps, stddev_schedule, stddev_clip, use_tb):
+                 hidden_dim, critic_target_tau, num_expl_steps, stddev_schedule, stddev_clip, use_tb):
         self.device = device
         self.critic_target_tau = critic_target_tau
-        self.update_every_steps = update_every_steps
         self.use_tb = use_tb
         self.num_expl_steps = num_expl_steps
         self.stddev_schedule = stddev_schedule
@@ -229,9 +227,6 @@ class DrQV2Agent:
 
     def update(self, replay_iter, step):
         metrics = dict()
-
-        if step % self.update_every_steps != 0:
-            return metrics
 
         batch = next(replay_iter)
         obs, action, reward, discount, next_obs = utils.to_torch(

@@ -1,7 +1,3 @@
-# Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved.
-#
-# This source code is licensed under the MIT license found in the
-# LICENSE file in the root directory of this source tree.
 import datetime
 import io
 import random
@@ -10,7 +6,6 @@ from collections import defaultdict
 
 import numpy as np
 import torch
-import torch.nn as nn
 from torch.utils.data import IterableDataset
 
 
@@ -157,7 +152,12 @@ class ReplayBuffer(IterableDataset):
             step_reward = episode['reward'][idx + i]
             reward += discount * step_reward
             discount *= episode['discount'][idx + i] * self._discount
-        return (obs, action, reward, discount, next_obs)
+        if 'observation_sensor' in episode.keys():
+            obs_sensor = episode['observation_sensor'][idx - 1]
+            next_obs_sensor = episode['observation_sensor'][idx + self._nstep - 1]
+            return (obs, action, reward, discount, next_obs, obs_sensor, next_obs_sensor)
+        else:
+            return (obs, action, reward, discount, next_obs)
 
     def __iter__(self):
         while True:
@@ -187,4 +187,4 @@ def make_replay_loader(replay_dir, max_size, batch_size, num_workers,
                                          num_workers=num_workers,
                                          pin_memory=True,
                                          worker_init_fn=_worker_init_fn)
-    return loader
+    return loader, iterable
