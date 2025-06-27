@@ -381,13 +381,15 @@ class OBACAgent:
         metrics = dict()
 
         with torch.no_grad():
+            target_V_buffer = self.value_buffer(next_obs)
+            target_Q_buffer = reward + (discount * target_V_buffer)
+
             dist, _ = self.actor(next_obs, self.stddev(step))
             next_action = dist.sample(clip=self.stddev_clip)
             target_Q1, target_Q2 = self.critic_target(next_obs, next_action)
             target_V = torch.min(target_Q1, target_Q2)
+            target_V = self.lambda_ * target_V_buffer + (1 - self.lambda_) * target_V
             target_Q = reward + (discount * target_V)
-            target_V_buffer = self.value_buffer(next_obs)
-            target_Q_buffer = reward + (discount * target_V_buffer)
 
         Q1, Q2 = self.critic(obs, action)
         critic_loss = F.mse_loss(Q1, target_Q) + F.mse_loss(Q2, target_Q)
@@ -437,19 +439,22 @@ class OBACAgent:
         pi_action = dist.sample(clip=self.stddev_clip)
         log_prob = dist.log_prob(pi_action).sum(-1, keepdim=True)
         Q1, Q2 = self.critic(obs, pi_action)
-        Q = torch.min(Q1, Q2).mean()
+        Q = torch.min(Q1, Q2)
 
-        actor_loss = -Q
+        actor_loss = -Q.mean()
 
         # OBAC terms
         log_prob_buffer = dist.log_prob(action).sum(-1, keepdim=True)
         Q1_buffer, Q2_buffer = self.critic_buffer(obs, action)
-        Q_buffer = torch.min(Q1_buffer, Q2_buffer).mean()
+        Q_buffer = torch.min(Q1_buffer, Q2_buffer)
 
-        if Q_buffer > Q:
-            actor_loss += -self.bc_weight * log_prob_buffer.mean()
-            self.obac_bc_times += 1
-        self.obac_total_times += 1
+        # if Q_buffer > Q:
+        #     actor_loss += -self.bc_weight * log_prob_buffer.mean()
+        #     self.obac_bc_times += 1
+        # self.obac_total_times += 1
+        actor_loss += -self.bc_weight * (log_prob_buffer * (Q_buffer > Q).float().detach()).mean()
+        self.obac_bc_times = (Q_buffer > Q).float().sum().item()
+        self.obac_total_times = action.shape[0]
 
         # optimize actor
         self.actor_opt.zero_grad(set_to_none=True)
@@ -464,7 +469,7 @@ class OBACAgent:
             metrics['actor_loss'] = actor_loss.item()
             metrics['actor_logprob'] = log_prob.mean().item()
             metrics['actor_ent'] = dist.entropy().sum(dim=-1).mean().item()
-            metrics['obac_rate'] = self.obac_bc_times / self.obac_total_times if self.obac_total_times > 0 else 0
+            metrics['obac_rate'] = self.obac_bc_times / self.obac_total_times
 
         return metrics
 

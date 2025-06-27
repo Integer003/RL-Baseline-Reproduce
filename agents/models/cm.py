@@ -277,7 +277,7 @@ class ConsistencyModel(nn.Module):
         consistency_diffs = (distiller - distiller_target) ** 2
         consistency_loss = mean_flat(consistency_diffs) * weights
 
-        return consistency_loss.mean()
+        return consistency_loss
     
     def loss(self, x_start, state, noise=None, td_weights=None):
         num_scales = self.steps

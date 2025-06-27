@@ -9,6 +9,7 @@ import utils.utils as utils
 from agents.models.cp3er_networks import CPActor as Actor
 from agents.models.cp3er_networks import MoGCritic as Critic
 from agents.models.cp3er_networks import Encoder
+from agents.models.cp3er_networks import MoGValue as VNetwork
 
 from torch.distributions import Normal, Categorical, MixtureSameFamily
 
@@ -45,25 +46,6 @@ class RandomShiftsAug(nn.Module):
                              padding_mode='zeros',
                              align_corners=False)
 
-class VNetwork(nn.Module):
-    def __init__(self, repr_dim, feature_dim, hidden_dim):
-        super().__init__()
-
-        self.trunk = nn.Sequential(nn.Linear(repr_dim, feature_dim),
-                                   nn.LayerNorm(feature_dim), nn.Tanh())
-
-        self.V = nn.Sequential(nn.Linear(feature_dim, hidden_dim),
-                               nn.ReLU(inplace=True),
-                               nn.Linear(hidden_dim, hidden_dim),
-                               nn.ReLU(inplace=True), nn.Linear(hidden_dim, 1))
-
-        self.apply(utils.weight_init)
-
-    def forward(self, obs):
-        obs = obs.reshape(obs.shape[0], -1)
-        h = self.trunk(obs)
-        v = self.V(h)
-        return v
 
 
 class CP3ERAgent:
@@ -96,7 +78,7 @@ class CP3ERAgent:
         self.critic = Critic(self.encoder.repr_dim, self.action_shape[0], self.feature_dim,self.hidden_dim, self.num_groups,self.num_components,self.init_scale).to(self.device)
         self.critic_target = Critic(self.encoder.repr_dim, self.action_shape[0], self.feature_dim,self.hidden_dim, self.num_groups,self.num_components,self.init_scale).to(self.device)
         # offline network
-        self.value_buffer = VNetwork(self.encoder.repr_dim, feature_dim, hidden_dim).to(device)
+        self.value_buffer = VNetwork(self.encoder.repr_dim, feature_dim, hidden_dim, self.num_groups, self.num_components, self.init_scale).to(device)
         self.critic_buffer = Critic(self.encoder.repr_dim, self.action_shape[0], self.feature_dim,self.hidden_dim, self.num_groups,self.num_components,self.init_scale).to(self.device)
         self.critic_target.load_state_dict(self.critic.state_dict())
 
@@ -149,12 +131,27 @@ class CP3ERAgent:
         obs = obs.detach()
 
         with torch.no_grad():
-            Q = self.critic_buffer(obs, action)['mus'].mean(dim=1, keepdim=True)
-        V = self.value_buffer(obs)
+            online_info = self.critic(obs, action)
+            mus, stdevs, logits = online_info['mus'], online_info['stdevs'], online_info['logits']
+            critic_dist = self.to_distribution(mus, stdevs, logits)
+            # Q = critic_dist.mean
+            if self.init_scale == 0:
+                Q = critic_dist.mean
+            else:
+                Q = critic_dist.sample((20,))
+
+        # V = self.value_buffer(obs)
+        V_info = self.value_buffer(obs)
+        mus_v, stdevs_v, logits_v = V_info['mus'], V_info['stdevs'], V_info['logits']
+        value_dist = self.to_distribution(mus_v, stdevs_v, logits_v)
+        V = value_dist.mean
+
         vf_err = V - Q
         vf_sign = (vf_err > 0).float()
         vf_weight = (1 - vf_sign) * self.expectile + vf_sign * (1 - self.expectile)
-        predictor_loss = (vf_weight * (vf_err**2)).mean()
+
+        predictor_loss = -value_dist.log_prob(Q)
+        predictor_loss = (vf_weight * predictor_loss).mean()
 
         if self.use_tb:
             metrics['predictor_loss'] = predictor_loss.item()
@@ -193,7 +190,7 @@ class CP3ERAgent:
         self.critic_opt.step()
 
         self.critic_buffer_opt.zero_grad(set_to_none=True)
-        critic_loss_buffer.backward(retain_graph=True)
+        critic_loss_buffer.backward()
         self.critic_buffer_opt.step()
 
         self.encoder_opt.step()
@@ -220,17 +217,11 @@ class CP3ERAgent:
         critic_dist_buffer = self.to_distribution(mus_buffer, stdevs_buffer, logits_buffer)
 
         q_buffer_estimate = critic_dist_buffer.mean
-        q_buffer_mean = torch.mean(q_buffer_estimate)
 
-        if q_buffer_mean > q_mean:
-            weight = 2.0
-            self.obac_bc_times += 1
-        else:
-            weight = 1.0
-        self.obac_total_times += 1
-
-        bc_loss = self.actor.cm.consistency_losses(action, obs)
-        actor_loss = q_loss + 0.05 * bc_loss * weight
+        bc_loss = (self.actor.cm.consistency_losses(action, obs) * (q_buffer_estimate > q_estimate).float().detach()).mean()
+        actor_loss = q_loss + 0.05 * bc_loss
+        self.obac_bc_times = (q_buffer_estimate > q_estimate).float().sum().item()
+        self.obac_total_times = obs.shape[0]
 
         # optimize actor
         self.actor_opt.zero_grad(set_to_none=True)
@@ -241,7 +232,7 @@ class CP3ERAgent:
             metrics['actor_loss'] = actor_loss.item()
             metrics['q_loss'] = q_loss.item()
             metrics['bc_loss'] = bc_loss.item()
-            metrics['obac_rate'] = self.obac_bc_times / self.obac_total_times if self.obac_total_times > 0 else 0
+            metrics['obac_rate'] = self.obac_bc_times / self.obac_total_times
 
         return metrics
 
@@ -327,7 +318,14 @@ class CP3ERAgent:
     def _compute_critic_loss_buffer(self,  obs, act, rew, discount, next_obs, step):
 
         with torch.no_grad():
-            target_Q = self.value_buffer(next_obs)
+            value_info = self.value_buffer(next_obs)
+            mus_v, stdevs_v, logits_v = value_info['mus'], value_info['stdevs'], value_info['logits'] 
+            value_dist = self.to_distribution(mus_v, stdevs_v, logits_v)
+            # target_Q = value_dist.mean
+            if self.init_scale == 0:
+                target_Q = value_dist.mean
+            else:
+                target_Q = value_dist.sample((20,))
             target_Q = rew + discount * target_Q
 
         offline_info = self.critic_buffer(obs, act)

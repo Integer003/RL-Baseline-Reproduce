@@ -38,4 +38,4 @@ agent:
   num_experts: 16
   top_k: 4
   dropout: 0.1
-  bc_weight: 0.05
+  bc_weight: 0.001

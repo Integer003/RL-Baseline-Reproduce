@@ -72,6 +72,67 @@ class MoGCritic(nn.Module):
 
         return info
  
+# Value Network with Mixture of Gaussians output
+class MoGValue(nn.Module):
+    """
+    A value network that predicts a mixture of Gaussian (MoG) distribution over state values.
+
+    Parameters:
+    - repr_dim (int): Dimensionality of the input observation representations.
+    - feature_dim (int): Intermediate feature dimensionality of the network.
+    - hidden_dim (int): Dimensionality of the hidden layers.
+    - num_groups (int, optional): Number of groups for GroupNorm. If set to 0, LayerNorm is used instead.
+    - num_components (int, optional): Number of components in the Gaussian mixture.
+    - init_scale (float, optional): Initial scaling factor for the standard deviations of the Gaussians.
+
+    Output:
+    - forward(obs): Returns a dict with keys 'mus', 'stdevs', and 'logits' for the MoG.
+    """
+    def __init__(self, repr_dim, feature_dim, hidden_dim, num_groups=0, num_components=1, init_scale=1e-3):
+        super(MoGValue, self).__init__()
+        self.num_components = num_components
+        self.init_scale = init_scale
+        self.num_groups = num_groups
+
+        self.trunk = nn.Sequential(
+            nn.Linear(repr_dim, feature_dim),
+            nn.LayerNorm(feature_dim)
+        )
+
+        self.linear1 = nn.Linear(feature_dim, hidden_dim)
+        self.linear2 = nn.Linear(hidden_dim, hidden_dim)
+        if self.num_groups:
+            self.gn1 = nn.GroupNorm(num_groups, hidden_dim)
+            self.gn2 = nn.GroupNorm(num_groups, hidden_dim)
+        else:
+            self.ln1 = nn.LayerNorm(hidden_dim)
+            self.ln2 = nn.LayerNorm(hidden_dim)
+
+        self.mus = nn.Linear(hidden_dim, num_components)
+        self.stdevs = nn.Linear(hidden_dim, num_components)
+        self.logits = nn.Linear(hidden_dim, num_components)
+
+    def forward(self, obs):
+        info = {}
+        h = self.trunk(obs)
+        if self.num_groups:
+            x = torch.relu(self.gn1(self.linear1(h)))
+            x = torch.relu(self.gn2(self.linear2(x)))
+        else:
+            x = torch.relu(self.ln1(self.linear1(h)))
+            x = torch.relu(self.ln2(self.linear2(x)))
+
+        mus = self.mus(x).unsqueeze(1)
+        stdevs = self.init_scale * F.softplus(self.stdevs(x)) / F.softplus(torch.tensor(0.)) + 1e-4
+        stdevs = stdevs.unsqueeze(1)
+        logits = self.logits(x).unsqueeze(1)
+
+        info['mus'] = mus
+        info['stdevs'] = stdevs
+        info['logits'] = logits
+
+        return info
+
 # Actor Network
 class CPActor(nn.Module):
     """
