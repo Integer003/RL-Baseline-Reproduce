@@ -12,6 +12,8 @@ import torch.nn.functional as F
 class MoE(nn.Module):
     def __init__(self, num_experts, input_dim, output_dim, gate_dim, hidden_dim, top_k, dropout=0.1):
         super(MoE, self).__init__()
+        print("Initializing MoE with {} experts, input_dim={}, output_dim={}, gate_dim={}, hidden_dim={}, top_k={}".format(
+            num_experts, input_dim, output_dim, gate_dim, hidden_dim, top_k))
         self.num_experts = num_experts
         self.input_dim = input_dim
         self.output_dim = output_dim
